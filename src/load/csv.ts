@@ -12,23 +12,31 @@ export type CsvKind =
   | "posts"
   | "free_subscriber_growth"
   | "paid_subscriber_growth"
+  | "subscriber_totals"
   | "unknown";
 
 /** Cabeceras que identifican cada export de Substack. Se detecta por contenido, no por nombre. */
-const SIGNATURES: Record<Exclude<CsvKind, "unknown">, string[]> = {
-  email_list: ["email", "active_subscription", "created_at"],
+const SIGNATURES: Record<Exclude<CsvKind, "unknown" | "email_list">, string[]> = {
   email_stats: ["title", "post_date", "open_rate"],
   growth_sources: ["date", "source", "new subscribers"],
   traffic: ["date", "views"],
   posts: ["post_id", "post_date", "is_published"],
   free_subscriber_growth: ["date", "new_free"],
   paid_subscriber_growth: ["date", "new_paid"],
+  subscriber_totals: ["date", "total_subscribers"],
 };
+
+/** Dos formatos de lista de suscriptores: el export legado (snake_case) y el actual de Audiencia → Exportar. */
+const EMAIL_LIST_SIGNATURES: string[][] = [
+  ["email", "active_subscription", "created_at"],
+  ["email", "type", "start date"],
+];
 
 export function detectKind(headers: string[]): CsvKind {
   const h = new Set(headers.map((x) => x.trim().toLowerCase()));
   // Orden importa: traffic (date, views) es subconjunto de otros → se evalúa con igualdad estricta.
   if (h.size === 2 && h.has("date") && h.has("views")) return "traffic";
+  if (EMAIL_LIST_SIGNATURES.some((sig) => sig.every((c) => h.has(c)))) return "email_list";
   for (const [kind, sig] of Object.entries(SIGNATURES) as [CsvKind, string[]][]) {
     if (kind === "traffic") continue;
     if (sig.every((c) => h.has(c))) return kind;

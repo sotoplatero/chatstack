@@ -36,7 +36,11 @@ export function getOverview(db: Db) {
       )
       .get(`-${days} days`);
   const posts = db.prepare("SELECT COUNT(*) AS total, SUM(is_published) AS published FROM posts").get();
+  const totalsSeries = db
+    .prepare("SELECT date, total_subscribers FROM subscriber_totals ORDER BY date DESC LIMIT 1")
+    .get() ?? null;
   return {
+    latest_total_from_series: totalsSeries,
     last_sync: lastRun ?? null,
     subscribers: totals,
     active_by_plan: byPlan,
@@ -112,30 +116,36 @@ export function getSubscriber(db: Db, email: string) {
 }
 
 /**
- * Candidatos a pago. El export de Substack NO trae aperturas/clicks por contacto, así que esto es un
- * proxy declarado: free + activo + con email habilitado, ordenados por antigüedad (más tiempo suscrito,
- * más señal de interés sostenido). Si en el futuro `extra` trae engagement, se prioriza ese campo.
+ * Candidatos a pago: free activos ordenados por engagement real del export de Substack
+ * (extra.activity 0-5, emails abiertos en 30d, días activos en 30d), con antigüedad como desempate.
+ * Si la BD solo tiene el export legado (sin engagement), degrada a proxy por antigüedad y lo declara.
  */
 export function findUpgradeCandidates(db: Db, limit = 50, minDaysSubscribed = 14) {
   const rows = db
     .prepare(
-      `SELECT email, subscribed_at, plan_since, extra,
-              CAST(julianday('now') - julianday(subscribed_at) AS INTEGER) AS days_subscribed
+      `SELECT email, subscribed_at, plan_since, source, extra,
+              CAST(julianday('now') - julianday(subscribed_at) AS INTEGER) AS days_subscribed,
+              json_extract(extra, '$.activity') AS activity,
+              json_extract(extra, '$.emails_opened_30d') AS emails_opened_30d,
+              json_extract(extra, '$.days_active_30d') AS days_active_30d,
+              json_extract(extra, '$.post_views_30d') AS post_views_30d
        FROM subscribers
        WHERE is_active = 1 AND plan = 'free' AND subscribed_at IS NOT NULL
          AND julianday('now') - julianday(subscribed_at) >= ?
        ORDER BY
-         COALESCE(json_extract(extra, '$.open_rate'), json_extract(extra, '$.opens'), -1) DESC,
+         COALESCE(json_extract(extra, '$.activity'), -1) DESC,
+         COALESCE(json_extract(extra, '$.emails_opened_30d'), -1) DESC,
+         COALESCE(json_extract(extra, '$.days_active_30d'), -1) DESC,
          subscribed_at ASC
        LIMIT ?`,
     )
     .all(minDaysSubscribed, Math.min(Math.max(limit, 1), 500))
     .map(withExtra);
-  const hasEngagement = rows.some((r: any) => r.extra?.open_rate !== undefined || r.extra?.opens !== undefined);
+  const hasEngagement = rows.some((r: any) => r.activity !== null && r.activity !== undefined);
   return {
     method: hasEngagement
-      ? "engagement real por contacto (open_rate/opens) y antigüedad"
-      : "PROXY: sin engagement individual en el export de Substack; ordenado por antigüedad entre free activos",
+      ? "engagement real por contacto: activity (0-5), emails_opened_30d, days_active_30d; antigüedad como desempate"
+      : "PROXY: la BD no tiene engagement individual (export legado); ordenado por antigüedad entre free activos",
     min_days_subscribed: minDaysSubscribed,
     count: rows.length,
     rows,

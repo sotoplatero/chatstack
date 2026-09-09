@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { resolve, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { openDb } from "./db/index.js";
 import { loadDirectory, type RunReport } from "./load/index.js";
 import { ingestSubstack } from "./ingest/substack.js";
+import { cookieFromCurl, loadAuth, saveAuth } from "./ingest/auth.js";
 import { serveStdio } from "./mcp/server.js";
 
 const HELP = `constack — MCP server local para tus datos de Substack
 
 Uso:
   constack sync   --sub <subdominio> [--cookies <archivo.curl>] [--db <ruta>] [--data <dir>]
-                  Descarga los exports con tu sesión de Chrome (agent-browser) y los carga en la BD.
+                  Descarga los exports por la API del panel con tu sesión y los carga en la BD.
+                  La primera vez pasa --cookies (Chrome → DevTools → Network → Copy as cURL);
+                  la sesión queda en <data>/substack-auth.json para los siguientes syncs.
   constack load   <carpeta> [--db <ruta>]
                   Carga CSV/ZIP exportados a mano desde el panel de Substack.
   constack mcp    [--db <ruta>]
@@ -20,7 +24,7 @@ Uso:
 Variables de entorno: CONSTACK_DB, CONSTACK_DATA, CONSTACK_SUB
 `;
 
-function main() {
+async function main() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -28,7 +32,6 @@ function main() {
       data: { type: "string" },
       sub: { type: "string" },
       cookies: { type: "string" },
-      session: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -44,10 +47,7 @@ function main() {
   switch (cmd) {
     case "mcp": {
       const db = openDb(dbPath);
-      serveStdio(db).catch((e) => {
-        log(String(e));
-        process.exit(1);
-      });
+      await serveStdio(db);
       return;
     }
     case "load": {
@@ -66,16 +66,22 @@ function main() {
         log("Falta el subdominio: constack sync --sub <subdominio> (o CONSTACK_SUB)");
         process.exit(1);
       }
+      const authPath = join(dataDir, "substack-auth.json");
+      let auth = loadAuth(authPath);
+      if (values.cookies) {
+        auth = saveAuth(authPath, cookieFromCurl(readFileSync(resolve(values.cookies), "utf8")));
+        log(`sesión guardada en ${authPath}`);
+      }
+      if (!auth) {
+        log(`No hay sesión guardada. Pasa --cookies <archivo.curl> la primera vez (ver README).`);
+        process.exit(1);
+      }
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const rawDir = join(dataDir, "raw", stamp);
-      const ingest = ingestSubstack({
-        subdomain: sub,
-        rawDir,
-        session: values.session ?? "constack",
-        stateFile: join(dataDir, "substack-auth.json"),
-        cookiesCurl: values.cookies ? resolve(values.cookies) : undefined,
-        log,
-      });
+      const ingest = await ingestSubstack({ subdomain: sub, rawDir, cookie: auth.cookie, log });
+      if (ingest.sessionExpired) {
+        log("La sesión de Substack ha caducado. Vuelve a pasar --cookies con un cURL nuevo.");
+      }
       if (ingest.failed.length) log(`Fallaron: ${ingest.failed.map((f) => `${f.kind} (${f.error})`).join("; ")}`);
       if (!ingest.downloaded.length) {
         log("No se descargó nada; no hay nada que cargar.");
@@ -101,4 +107,7 @@ function printReport(rep: RunReport, log: (m: string) => void) {
   }
 }
 
-main();
+main().catch((e) => {
+  process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+  process.exit(1);
+});

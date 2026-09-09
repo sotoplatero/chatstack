@@ -1,24 +1,12 @@
 import type { Db } from "../db/index.js";
 import { nowIso } from "../db/index.js";
 import { normDate, rest, toBool, toInt, toNum, type Row } from "./csv.js";
+import { normalizeSubscriberRow } from "./subscriberRow.js";
 
 export interface LoadResult {
   inserted: number;
   updated: number;
   skipped: number;
-}
-
-/** Plan normalizado: paid si hay suscripción activa; el plan crudo va a extra.raw_plan. */
-export function normalizePlan(row: Row): { plan: string; isActive: number } {
-  const active = toBool(row.active_subscription);
-  const raw = (row.plan ?? "").trim().toLowerCase();
-  const isActive = toBool(row.email_disabled) ? 0 : 1;
-  if (active) {
-    const plan = raw === "" || raw === "other" ? "paid" : raw;
-    return { plan, isActive };
-  }
-  if (raw === "comp" || raw === "gift" || raw === "founding") return { plan: raw, isActive };
-  return { plan: "free", isActive };
 }
 
 function tx<T>(db: Db, fn: () => T): T {
@@ -39,43 +27,34 @@ export function loadEmailList(db: Db, runId: number, rows: Row[]): LoadResult {
   const getSub = db.prepare("SELECT email, plan, plan_since FROM subscribers WHERE email = ?");
   const ins = db.prepare(`INSERT INTO subscribers
     (email, first_seen_at, subscribed_at, source, is_active, plan, plan_since, unsubscribed_at, last_synced_run_id, extra)
-    VALUES (?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?)`);
-  const upd = db.prepare(`UPDATE subscribers SET subscribed_at = ?, is_active = ?, plan = ?, plan_since = ?,
-    unsubscribed_at = NULL, last_synced_run_id = ?, extra = ? WHERE email = ?`);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const upd = db.prepare(`UPDATE subscribers SET subscribed_at = ?, source = COALESCE(?, source), is_active = ?, plan = ?, plan_since = ?,
+    unsubscribed_at = ?, last_synced_run_id = ?, extra = ? WHERE email = ?`);
   const snap = db.prepare(
     "INSERT OR REPLACE INTO subscriber_snapshots (run_id, email, is_active, plan, extra) VALUES (?, ?, ?, ?, ?)",
   );
-  const used = ["email", "active_subscription", "plan", "email_disabled", "created_at", "first_payment_at", "expiry"];
 
   return tx(db, () => {
     const seen = new Set<string>();
     for (const row of rows) {
-      const email = (row.email ?? "").trim().toLowerCase();
-      if (!email) {
+      const r = normalizeSubscriberRow(row);
+      if (!r) {
         res.skipped++;
         continue;
       }
-      seen.add(email);
-      const { plan, isActive } = normalizePlan(row);
-      const extra = JSON.stringify({
-        raw_plan: row.plan || undefined,
-        expiry: row.expiry || undefined,
-        first_payment_at: row.first_payment_at || undefined,
-        ...JSON.parse(rest(row, used)),
-      });
-      const createdAt = normDate(row.created_at);
-      const paidSince = normDate(row.first_payment_at);
-      const prev = getSub.get(email) as { plan: string; plan_since: string | null } | undefined;
+      seen.add(r.email);
+      const extra = JSON.stringify(r.extra);
+      const prev = getSub.get(r.email) as { plan: string; plan_since: string | null } | undefined;
       if (!prev) {
-        const planSince = plan === "free" ? createdAt : (paidSince ?? createdAt);
-        ins.run(email, now, createdAt, isActive, plan, planSince, runId, extra);
+        const planSince = r.plan === "free" ? r.createdAt : (r.paidSince ?? r.createdAt);
+        ins.run(r.email, now, r.createdAt, r.source, r.isActive, r.plan, planSince, r.unsubscribedAt, runId, extra);
         res.inserted++;
       } else {
-        const planSince = prev.plan === plan ? prev.plan_since : plan === "free" ? now : (paidSince ?? now);
-        upd.run(createdAt, isActive, plan, planSince, runId, extra, email);
+        const planSince = prev.plan === r.plan ? prev.plan_since : r.plan === "free" ? now : (r.paidSince ?? now);
+        upd.run(r.createdAt, r.source, r.isActive, r.plan, planSince, r.unsubscribedAt, runId, extra, r.email);
         res.updated++;
       }
-      snap.run(runId, email, isActive, plan, extra);
+      snap.run(runId, r.email, r.isActive, r.plan, extra);
     }
     // Quien estaba activo y ya no aparece en el export se ha dado de baja.
     const stale = db
@@ -257,6 +236,24 @@ export function loadSubscriberGrowth(db: Db, runId: number, rows: Row[], kind: "
           toInt(row.cancellations_finalized),
           runId,
         );
+      res.inserted++;
+    }
+    return res;
+  });
+}
+
+export function loadSubscriberTotals(db: Db, runId: number, rows: Row[]): LoadResult {
+  const res: LoadResult = { inserted: 0, updated: 0, skipped: 0 };
+  const stmt = db.prepare("INSERT OR REPLACE INTO subscriber_totals (date, total_subscribers, run_id) VALUES (?, ?, ?)");
+  return tx(db, () => {
+    for (const row of rows) {
+      const date = normDate(col(row, "date"));
+      const total = toInt(col(row, "total_subscribers"));
+      if (!date || total === null) {
+        res.skipped++;
+        continue;
+      }
+      stmt.run(date, total, runId);
       res.inserted++;
     }
     return res;

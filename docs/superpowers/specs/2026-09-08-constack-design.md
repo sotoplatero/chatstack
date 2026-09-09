@@ -10,14 +10,18 @@ métricas de una publicación de Substack, sobre una base de datos local y con h
 - Plataforma: solo Substack. Gumroad y Kit quedan fuera (el diseño deja `platform` en
   las tablas para añadirlos después sin migrar).
 - Datos: contactos individuales + agregados (posts, email stats, growth, traffic).
-- Ingesta: automática vía navegador con `agent-browser` reutilizando la sesión del
-  propietario (Método B del skill `auditoria-substack`). Carga manual de CSV como respaldo.
+- Ingesta: automática por HTTP contra los endpoints internos del panel (los mismos que usa
+  "Descargar CSV"), autenticada con la cookie de sesión del propietario, importada una vez
+  desde un "Copy as cURL" de Chrome. Carga manual de CSV como respaldo.
+  (Decisión 2026-09-09: la automatización de UI con agent-browser se descartó tras probarla —
+  la UI cambió respecto al skill y los botones de exportar disparan estos endpoints, que
+  devuelven 503 esporádicos; llamarlos directamente es más simple y robusto.)
 - Ejecución: Node 22 + TypeScript, SQLite vía `node:sqlite`, MCP stdio con el SDK oficial.
   Todo local; nada sale de la máquina.
 
 ## Arquitectura
 ```
-constack sync  → ingest/ (agent-browser → ./data/raw/<timestamp>/*.csv|zip)
+constack sync  → ingest/ (HTTP + cookie de sesión → ./data/raw/<timestamp>/*.csv)
                → load/   (CSV → SQLite ./data/constack.db, idempotente)
 constack load <dir>      (solo load/, para CSV bajados a mano)
 constack mcp   → mcp/    (server stdio, solo lectura)
@@ -42,10 +46,10 @@ aunque Substack cambie los exports. El loader detecta el tipo de CSV por sus cab
 no por el nombre del archivo.
 
 ## Engagement por suscriptor
-No está verificado que el export de suscriptores de Substack traiga opens/clicks por
-contacto. El loader guarda todas las columnas en `extra`; la tool
-`find_upgrade_candidates` usa engagement real si existe y, si no, un proxy declarado
-(activo + antigüedad + origen) y lo dice en su descripción.
+Verificado 2026-09-09: el export "todas las columnas" (`subscriber_set/export`, 44 columnas)
+trae `Activity` (0-5), emails abiertos 7d/30d/6mo, post views, clicks y días activos por
+contacto. El loader lo normaliza a claves estables en `extra` y `find_upgrade_candidates`
+ordena por ellas; con el export legado (sin engagement) degrada a antigüedad y lo declara.
 
 ## Herramientas MCP
 - `get_overview` — totales actuales, free/paid, último sync, tendencia 30/90 días.

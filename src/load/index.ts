@@ -11,6 +11,7 @@ import {
   loadGrowthSources,
   loadPosts,
   loadSubscriberGrowth,
+  loadSubscriberTotals,
   loadTraffic,
   type LoadResult,
 } from "./loaders.js";
@@ -55,6 +56,7 @@ const ORDER: CsvKind[] = [
   "traffic",
   "free_subscriber_growth",
   "paid_subscriber_growth",
+  "subscriber_totals",
   "unknown",
 ];
 
@@ -108,6 +110,9 @@ export function loadDirectory(db: Db, dir: string): RunReport {
             break;
           case "paid_subscriber_growth":
             rep.result = loadSubscriberGrowth(db, runId, f.rows, "paid");
+            break;
+          case "subscriber_totals":
+            rep.result = loadSubscriberTotals(db, runId, f.rows);
             break;
           case "unknown":
             rep.error = "cabeceras no reconocidas; archivo registrado pero no cargado";

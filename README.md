@@ -8,8 +8,7 @@ Todo corre en tu máquina. Nada sale de ella.
 
 ## Requisitos
 
-- Node 22.13+ (usa `node:sqlite`, sin compilar nada nativo)
-- Para `sync` automático: [`agent-browser`](https://www.npmjs.com/package/agent-browser) instalado globalmente
+- Node 22.13+ (usa `node:sqlite`, sin compilar nada nativo). Nada más: la ingesta es HTTP puro.
 
 ## Instalación
 
@@ -22,30 +21,45 @@ npm run build
 
 ### 1. Meter datos
 
-**Automático** — usa tu sesión de Substack ya iniciada en Chrome. La primera vez hay que importar cookies:
+**Automático (`sync`)** — llama a los mismos endpoints que usa el botón "Descargar CSV" del panel,
+autenticado con tu cookie de sesión. La primera vez hay que dársela:
 
-1. En Chrome, en `https://<tu-sub>.substack.com/publish/home`, abre DevTools → Network → recarga.
-2. Clic derecho en la primera petición → Copy → **Copy as cURL (bash)**. Pégalo en un archivo, p. ej. `substack.curl`.
-3. `node dist/cli.js sync --sub <tu-sub> --cookies substack.curl`
+1. En Chrome, logueado, abre `https://<tu-sub>.substack.com/publish/home`.
+2. `F12` → **Network** → recarga con `Ctrl+R`.
+3. Clic derecho en la primera petición (`home`) → **Copy → Copy as cURL (bash)**. Pégalo en un archivo, p. ej. `substack.curl`.
+4. `node dist/cli.js sync --sub <tu-sub> --cookies substack.curl`
 
-La sesión queda guardada en `data/substack-auth.json`; los siguientes syncs no necesitan `--cookies`:
+La cookie queda en `data/substack-auth.json` (ignorado por git, permisos 600). Los siguientes syncs no necesitan nada:
 
 ```bash
 node dist/cli.js sync --sub <tu-sub>
 ```
 
-Borra `substack.curl` cuando termines: contiene tu sesión.
+Borra `substack.curl` al terminar: contiene tu sesión. Cuando Substack la caduque, `sync` lo dirá y repites el paso.
 
-**Manual** — exporta los CSV desde el panel (Audiencia → export; Stats → Posts ⋯ → Download;
-Audiencia → Growth → export; Stats → Traffic → export; Settings → Import/Export → New export para el ZIP)
-y cárgalos desde una carpeta:
+Qué descarga cada sync (a `data/raw/<timestamp>/`):
+
+| Archivo | Endpoint del panel | Contenido |
+|---|---|---|
+| `email_list.csv` | `POST subscriber_set` → `POST subscriber_set/export` → sondeo → fichero | **125 contactos × 44 columnas**: plan, fechas, fuente, país y **engagement individual** (Activity 0-5, emails abiertos 7d/30d/6mo, post views, clicks, días activos) |
+| `posts.csv` | `GET /api/v1/archive` paginado | Posts publicados (id, título, fecha, audiencia, tipo, url, palabras) |
+| `email_stats.csv` | `stats/email_stats?format=csv` | Views, open_rate, engagement, signups y subscribes por post |
+| `growth_sources.csv` | `stats/growth/sources` | Visitantes, altas e ingresos por fuente y día |
+| `traffic.csv` | `stats/publication_traffic/timeseries` en tramos de 90 días | Vistas diarias |
+| `paid_subscriber_growth.csv` | `stats/paid_subscriber_growth?period=day` | Altas de pago, upgrades, trials, cancelaciones por día |
+| `subscriber_totals.csv` | `stats/emails/timeseries?resolution=day` | Total de suscriptores por día |
+
+Los endpoints devuelven 503 esporádicos; el cliente reintenta con espera creciente. Si Substack
+cambia alguno, el resto se descarga igual y el run queda `partial`.
+
+**Manual (`load`)** — cualquier CSV/ZIP exportado a mano desde el panel, en una carpeta:
 
 ```bash
 node dist/cli.js load ./carpeta-con-csvs
 ```
 
-El tipo de cada CSV se detecta por sus cabeceras, no por el nombre. Los ZIP se expanden solos.
-Recargar la misma carpeta no duplica nada.
+El tipo de cada CSV se detecta por sus cabeceras, no por el nombre; acepta tanto el export actual
+de suscriptores como el legado (`email,active_subscription,…`). Recargar no duplica nada.
 
 ### 2. Conectar a Claude Code
 
@@ -89,11 +103,10 @@ Para Claude Desktop, en `claude_desktop_config.json`:
 | `get_schema` | Tablas, DDL y conteos |
 | `query_sql` | SELECT libre, solo lectura, LIMIT 200 por defecto |
 
-**Nota sobre engagement por contacto**: el export de suscriptores de Substack trae
-`email, active_subscription, expiry, plan, email_disabled, created_at, first_payment_at` — sin aperturas ni
-clicks individuales. `find_upgrade_candidates` lo declara en su respuesta (`method`) y ordena por antigüedad
-entre free activos. Si algún día el export trae engagement, el loader lo guarda en `extra` y la tool lo usa
-automáticamente.
+**Engagement por contacto**: el export "todas las columnas" de Audiencia → Exportar trae `Activity` (0-5),
+emails abiertos (7d/30d/6mo), post views, clicks y días activos. El loader lo guarda normalizado en `extra`
+(`activity`, `emails_opened_30d`, `days_active_30d`, …) y `find_upgrade_candidates` ordena por eso. Si la BD
+solo tiene el export legado (sin engagement), la tool degrada a antigüedad y lo declara en `method`.
 
 ## Histórico
 
@@ -106,7 +119,7 @@ evolución real de tu lista, algo que ningún CSV suelto te da.
 ```
 src/db       esquema SQLite y helpers
 src/load     detección de CSV por cabeceras + loaders idempotentes
-src/ingest   descarga vía agent-browser con la sesión del propietario
+src/ingest   cliente HTTP de los endpoints del panel + manejo de la cookie de sesión
 src/mcp      queries puras + registro de tools MCP
 tests        vitest con fixtures sintéticos
 data/        BD y exports crudos (ignorado por git)

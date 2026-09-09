@@ -91,6 +91,12 @@ CREATE TABLE IF NOT EXISTS traffic (
   run_id INTEGER NOT NULL REFERENCES sync_runs(id)
 );
 
+CREATE TABLE IF NOT EXISTS subscriber_totals (
+  date TEXT PRIMARY KEY,
+  total_subscribers INTEGER NOT NULL,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
 CREATE TABLE IF NOT EXISTS subscriber_growth_daily (
   date TEXT PRIMARY KEY,
   new_free INTEGER,

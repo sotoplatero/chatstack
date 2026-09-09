@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { openDb, type Db } from "../src/db/index.js";
 import { detectKind, normDate } from "../src/load/csv.js";
 import { loadDirectory } from "../src/load/index.js";
-import { normalizePlan } from "../src/load/loaders.js";
+import { normalizeSubscriberRow } from "../src/load/subscriberRow.js";
 
 const EMAIL_LIST_V1 = `email,active_subscription,expiry,plan,email_disabled,created_at,first_payment_at
 a@x.com,false,,other,false,2026-07-01T00:00:00.000Z,
@@ -58,6 +58,8 @@ describe("detectKind", () => {
     expect(detectKind("post_id,post_date,is_published,email_sent_at,inbox_sent_at,type,audience,title,subtitle,podcast_url".split(","))).toBe("posts");
     expect(detectKind(["date", "new_free", "unsubscribes"])).toBe("free_subscriber_growth");
     expect(detectKind(["date", "new_paid", "upgrades"])).toBe("paid_subscriber_growth");
+    expect(detectKind(["Email", "Name", "Stripe plan", "Cancel date", "Start date", "Activity", "Type"])).toBe("email_list");
+    expect(detectKind(["date", "total_subscribers"])).toBe("subscriber_totals");
     expect(detectKind(["foo", "bar"])).toBe("unknown");
   });
 });
@@ -68,10 +70,14 @@ describe("normDate / normalizePlan", () => {
     expect(normDate("2026-07-18T04:27:59.900Z")).toBe("2026-07-18T04:27:59.900Z");
     expect(normDate("")).toBeNull();
   });
-  it("mapea plan/activo", () => {
-    expect(normalizePlan({ active_subscription: "false", plan: "other", email_disabled: "false" })).toEqual({ plan: "free", isActive: 1 });
-    expect(normalizePlan({ active_subscription: "true", plan: "yearly", email_disabled: "false" })).toEqual({ plan: "yearly", isActive: 1 });
-    expect(normalizePlan({ active_subscription: "true", plan: "other", email_disabled: "true" })).toEqual({ plan: "paid", isActive: 0 });
+  it("mapea plan/activo (formato legado)", () => {
+    const n = (r: Record<string, string>) => {
+      const x = normalizeSubscriberRow({ email: "a@x.com", created_at: "2026-01-01", ...r })!;
+      return { plan: x.plan, isActive: x.isActive };
+    };
+    expect(n({ active_subscription: "false", plan: "other", email_disabled: "false" })).toEqual({ plan: "free", isActive: 1 });
+    expect(n({ active_subscription: "true", plan: "yearly", email_disabled: "false" })).toEqual({ plan: "yearly", isActive: 1 });
+    expect(n({ active_subscription: "true", plan: "other", email_disabled: "true" })).toEqual({ plan: "paid", isActive: 0 });
   });
 });
 
