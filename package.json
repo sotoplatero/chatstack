@@ -1,0 +1,36 @@
+{
+  "name": "constack",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "mcp": "node --no-warnings=ExperimentalWarning dist/cli.js mcp"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bin": {
+    "constack": "./dist/cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "adm-zip": "^0.6.0",
+    "csv-parse": "^7.0.2",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/node": "^26.5.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
