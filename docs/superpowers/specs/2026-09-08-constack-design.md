@@ -51,6 +51,14 @@ trae `Activity` (0-5), emails abiertos 7d/30d/6mo, post views, clicks y días ac
 contacto. El loader lo normaliza a claves estables en `extra` y `find_upgrade_candidates`
 ordena por ellas; con el export legado (sin engagement) degrada a antigüedad y lo declara.
 
+## Notes (añadido 2026-09-09)
+Tablas `notes`, `note_actors`, `note_interactions` (nota × persona × like|restack|reply).
+Fuente: `substack.com/api/v1/reader/feed/profile/{user_id}` (paginado por cursor; se descartan
+posts y restacks ajenos por `comment.user_id`), y por nota `comment/{id}/reactors`,
+`comment/{id}/restackers`, `reader/comment/{id}/replies` (descendientes envueltos en
+`{comment,type}`) y `note_stats/c-{id}` opcional. Rate limit 429: una petición a la vez con
+pausa y backoff exponencial. Tools: `get_notes_performance`, `get_note_engagers`, `get_note`.
+
 ## Herramientas MCP
 - `get_overview` — totales actuales, free/paid, último sync, tendencia 30/90 días.
 - `list_subscribers(filter, limit, offset)` — filtros por plan, activo, fuente, fecha.

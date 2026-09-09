@@ -276,3 +276,75 @@ function withExtra<T extends Record<string, unknown>>(row: T): T {
   }
   return row;
 }
+
+/** Notas propias con contadores y, si Substack ya las publicó, las stats (impresiones, etc.). */
+export function getNotesPerformance(db: Db, sort: "date" | "reactions" | "restacks" | "replies" | "interactions" = "interactions", limit = 50) {
+  const order = {
+    date: "n.date DESC",
+    reactions: "n.reaction_count DESC, n.date DESC",
+    restacks: "n.restacks DESC, n.date DESC",
+    replies: "n.replies_count DESC, n.date DESC",
+    interactions: "(n.reaction_count + n.restacks + n.replies_count) DESC, n.date DESC",
+  }[sort];
+  return db
+    .prepare(
+      `SELECT n.note_id, n.date, substr(n.body, 1, 200) AS excerpt, n.reaction_count AS likes, n.restacks, n.replies_count AS replies,
+              (n.reaction_count + n.restacks + n.replies_count) AS interactions,
+              (SELECT COUNT(DISTINCT actor_user_id) FROM note_interactions i WHERE i.note_id = n.note_id) AS unique_people,
+              n.attachments, n.stats IS NOT NULL AS has_stats,
+              'https://substack.com/@' || COALESCE((SELECT handle FROM note_actors WHERE user_id = n.user_id), '') || '/note/c-' || n.note_id AS url
+       FROM notes n ORDER BY ${order} LIMIT ?`,
+    )
+    .all(Math.min(Math.max(limit, 1), 500))
+    .map((r: any) => ({ ...r, attachments: safeJson(r.attachments) }));
+}
+
+/**
+ * Quién interactúa más con tus Notes: likes, restacks y respuestas por persona, con su publicación y
+ * si Substack la marca como seguidora. `matched_subscriber_email` intenta casar por nombre con la lista
+ * de suscriptores (Substack no da el email de quien da like), así que es una pista, no una certeza.
+ */
+export function getNoteEngagers(db: Db, limit = 30, kind?: "like" | "restack" | "reply") {
+  const where = kind ? "WHERE i.kind = ?" : "";
+  const args: unknown[] = kind ? [kind] : [];
+  return db
+    .prepare(
+      `SELECT a.user_id, a.name, a.handle, a.publication_subdomain, a.publication_name, a.is_following, a.is_subscribed,
+              COUNT(*) AS interactions,
+              SUM(i.kind = 'like') AS likes, SUM(i.kind = 'restack') AS restacks, SUM(i.kind = 'reply') AS replies,
+              COUNT(DISTINCT i.note_id) AS notes_touched,
+              MIN(n.date) AS first_interaction_note_date, MAX(n.date) AS last_interaction_note_date,
+              (SELECT s.email FROM subscribers s WHERE s.is_active = 1 AND a.name IS NOT NULL
+                 AND lower(json_extract(s.extra, '$.name')) = lower(a.name) LIMIT 1) AS matched_subscriber_email
+       FROM note_interactions i
+       JOIN note_actors a ON a.user_id = i.actor_user_id
+       JOIN notes n ON n.note_id = i.note_id
+       ${where}
+       GROUP BY a.user_id
+       ORDER BY interactions DESC, replies DESC, restacks DESC, likes DESC
+       LIMIT ?`,
+    )
+    .all(...(args as any[]), Math.min(Math.max(limit, 1), 500));
+}
+
+export function getNote(db: Db, noteId: number) {
+  const note = db.prepare("SELECT * FROM notes WHERE note_id = ?").get(noteId) as Record<string, unknown> | undefined;
+  if (!note) return null;
+  const interactions = db
+    .prepare(
+      `SELECT i.kind, i.created_at, i.body, i.reaction_count, a.user_id, a.name, a.handle, a.publication_subdomain, a.is_following
+       FROM note_interactions i JOIN note_actors a ON a.user_id = i.actor_user_id
+       WHERE i.note_id = ? ORDER BY i.kind, i.created_at`,
+    )
+    .all(noteId);
+  return { ...note, attachments: safeJson(note.attachments), stats: safeJson(note.stats), interactions };
+}
+
+function safeJson(v: unknown) {
+  if (typeof v !== "string") return v ?? null;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v;
+  }
+}

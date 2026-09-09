@@ -97,6 +97,48 @@ CREATE TABLE IF NOT EXISTS subscriber_totals (
   run_id INTEGER NOT NULL REFERENCES sync_runs(id)
 );
 
+CREATE TABLE IF NOT EXISTS notes (
+  note_id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  date TEXT,
+  body TEXT,
+  reaction_count INTEGER NOT NULL DEFAULT 0,
+  restacks INTEGER NOT NULL DEFAULT 0,
+  replies_count INTEGER NOT NULL DEFAULT 0,
+  attachments TEXT NOT NULL DEFAULT '[]',
+  stats TEXT,
+  stats_updated_at TEXT,
+  last_synced_run_id INTEGER REFERENCES sync_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_date ON notes(date);
+
+CREATE TABLE IF NOT EXISTS note_actors (
+  user_id INTEGER PRIMARY KEY,
+  name TEXT,
+  handle TEXT,
+  photo_url TEXT,
+  publication_subdomain TEXT,
+  publication_name TEXT,
+  is_subscribed INTEGER,
+  is_following INTEGER,
+  bestseller_tier INTEGER,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS note_interactions (
+  note_id INTEGER NOT NULL REFERENCES notes(note_id),
+  actor_user_id INTEGER NOT NULL REFERENCES note_actors(user_id),
+  kind TEXT NOT NULL CHECK (kind IN ('like','restack','reply')),
+  reply_id INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
+  body TEXT,
+  reaction_count INTEGER,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+  PRIMARY KEY (note_id, actor_user_id, kind, reply_id)
+);
+CREATE INDEX IF NOT EXISTS idx_note_interactions_actor ON note_interactions(actor_user_id);
+
 CREATE TABLE IF NOT EXISTS subscriber_growth_daily (
   date TEXT PRIMARY KEY,
   new_free INTEGER,

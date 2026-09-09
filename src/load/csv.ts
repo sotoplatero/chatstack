@@ -13,10 +13,11 @@ export type CsvKind =
   | "free_subscriber_growth"
   | "paid_subscriber_growth"
   | "subscriber_totals"
+  | "notes"
   | "unknown";
 
 /** Cabeceras que identifican cada export de Substack. Se detecta por contenido, no por nombre. */
-const SIGNATURES: Record<Exclude<CsvKind, "unknown" | "email_list">, string[]> = {
+const SIGNATURES: Record<Exclude<CsvKind, "unknown" | "email_list" | "notes">, string[]> = {
   email_stats: ["title", "post_date", "open_rate"],
   growth_sources: ["date", "source", "new subscribers"],
   traffic: ["date", "views"],

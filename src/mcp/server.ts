@@ -64,7 +64,7 @@ export function buildServer(db: Db): McpServer {
     {
       title: "Candidatos a pasar a pago",
       description:
-        "Suscriptores free activos ordenados como candidatos a pago. IMPORTANTE: el export de Substack no incluye aperturas ni clicks por contacto, así que salvo que la BD tenga engagement en `extra`, el orden es un PROXY por antigüedad (más tiempo suscrito y activo = más señal). El campo `method` de la respuesta dice cuál se usó; no presentes el proxy como engagement real.",
+        "Suscriptores free activos ordenados como candidatos a pago por engagement real del export de Substack: activity (0-5), emails abiertos en 30 días y días activos, con antigüedad como desempate. Cada fila trae en `extra` el detalle (aperturas 7d/30d/6mo, clicks, vistas, último email abierto, fuente). Si la BD solo tuviera el export legado sin engagement, `method` lo indica y el orden pasa a ser por antigüedad.",
       inputSchema: {
         limit: z.number().int().min(1).max(500).optional(),
         min_days_subscribed: z.number().int().min(0).optional(),
@@ -111,6 +111,44 @@ export function buildServer(db: Db): McpServer {
       inputSchema: { from: z.string().optional(), to: z.string().optional() },
     },
     async ({ from, to }) => safe(() => q.getChurn(db, from, to)),
+  );
+
+  server.registerTool(
+    "get_notes_performance",
+    {
+      title: "Rendimiento de tus Notes",
+      description:
+        "Tus Notes (substack.com) con likes, restacks, respuestas, personas únicas que interactuaron y adjuntos. `has_stats` indica si Substack ya publicó impresiones para esa nota (tarda ~24h).",
+      inputSchema: {
+        sort: z.enum(["date", "reactions", "restacks", "replies", "interactions"]).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    async ({ sort, limit }) => safe(() => q.getNotesPerformance(db, sort ?? "interactions", limit ?? 50)),
+  );
+
+  server.registerTool(
+    "get_note_engagers",
+    {
+      title: "Quién interactúa con tus Notes",
+      description:
+        "Personas ordenadas por interacciones con tus Notes (likes + restacks + respuestas), con su publicación, si te siguen, cuántas notas tocaron y `matched_subscriber_email` si su nombre coincide con un suscriptor (pista, no certeza: Substack no revela el email de quien da like). Filtra por `kind` para ver solo quién restackea o quién responde.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(500).optional(),
+        kind: z.enum(["like", "restack", "reply"]).optional(),
+      },
+    },
+    async ({ limit, kind }) => safe(() => q.getNoteEngagers(db, limit ?? 30, kind)),
+  );
+
+  server.registerTool(
+    "get_note",
+    {
+      title: "Detalle de una Note",
+      description: "Una Note con su texto completo, adjuntos, stats (si las hay) y la lista de quién dio like, restackeó o respondió (con el texto de cada respuesta).",
+      inputSchema: { note_id: z.number().int() },
+    },
+    async ({ note_id }) => safe(() => q.getNote(db, note_id) ?? { error: "No existe esa nota en la base." }),
   );
 
   server.registerTool(

@@ -80,6 +80,8 @@ function fakeSubstack() {
     }
     if (path === "/api/v1/subscriber_set/export/exp1/file")
       return text("Email,Name,Stripe plan,Cancel date,Start date,Paid upgrade date,Activity,Type\na@x.com,Ana,,,2026-06-17T10:21:38.759Z,,4,Free\n");
+    if (path === "/api/v1/user/profile/self") return json({ id: 1, name: "Yo", handle: "yo" });
+    if (path.startsWith("/api/v1/reader/feed/profile/")) return json({ items: [], nextCursor: "" });
     if (path.startsWith("/api/v1/archive")) {
       const offset = Number(new URL(url).searchParams.get("offset"));
       return json(offset === 0 ? [{ id: 1, slug: "a", title: "A, con coma", post_date: "2026-07-18T00:00:00.000Z", audience: "everyone", type: "newsletter", canonical_url: "https://x/p/a", wordcount: 10 }] : []);
@@ -101,15 +103,15 @@ describe("dateChunks", () => {
 });
 
 describe("ingestSubstack", () => {
-  it("descarga los 7 exports por API, reintenta 503 y produce CSV que el loader reconoce", async () => {
+  it("descarga los 8 exports por API, reintenta 503 y produce CSV que el loader reconoce", async () => {
     const { fetchImpl, seen } = fakeSubstack();
     const rawDir = mkdtempSync(join(tmpdir(), "constack-ing-"));
-    const rep = await ingestSubstack({ subdomain: "x", rawDir, cookie: "substack.sid=s", fetchImpl, delays: { retryBaseMs: 1, pollMs: 1 } });
+    const rep = await ingestSubstack({ subdomain: "x", rawDir, cookie: "substack.sid=s", fetchImpl, delays: { retryBaseMs: 1, pollMs: 1, pauseMs: 0 } });
     expect(rep.failed).toEqual([]);
     expect(rep.downloaded.map((d) => d.kind).sort()).toEqual(
-      ["email_list", "email_stats", "growth_sources", "paid_subscriber_growth", "posts", "subscriber_totals", "traffic"].sort(),
+      ["email_list", "email_stats", "growth_sources", "notes", "paid_subscriber_growth", "posts", "subscriber_totals", "traffic"].sort(),
     );
-    for (const d of rep.downloaded) {
+    for (const d of rep.downloaded.filter((d) => d.kind !== "notes")) {
       expect(existsSync(d.path)).toBe(true);
       const { headers } = readCsv(d.path);
       expect(detectKind(headers)).toBe(d.kind);

@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { collectNotes } from "./notes.js";
 
 /**
  * Cliente HTTP contra los endpoints internos del panel de Substack, autenticado con la
@@ -20,8 +21,10 @@ export interface IngestOptions {
 export interface Delays {
   retryBaseMs: number;
   pollMs: number;
+  /** Pausa mínima entre peticiones GET; Substack devuelve 429 si se encadenan sin respiro. */
+  pauseMs: number;
 }
-const DEFAULT_DELAYS: Delays = { retryBaseMs: 1500, pollMs: 2000 };
+const DEFAULT_DELAYS: Delays = { retryBaseMs: 1500, pollMs: 2000, pauseMs: 250 };
 
 export interface IngestReport {
   rawDir: string;
@@ -71,18 +74,20 @@ export class SubstackClient {
     return { "user-agent": UA, cookie: this.cookie, referer: `${this.base}/publish/home`, ...extra };
   }
 
-  /** GET con reintentos ante 5xx (Substack devuelve 503 a la primera con frecuencia). */
+  /** GET con reintentos ante 5xx (503 esporádicos) y 429 (rate limit, con Retry-After si viene). */
   async get(path: string, accept = "*/*", attempts = 5): Promise<Response> {
     const url = path.startsWith("http") ? path : this.base + path;
     let last: Response | undefined;
     for (let i = 0; i < attempts; i++) {
+      if (this.delays.pauseMs) await sleep(this.delays.pauseMs);
       const res = await this.fetchImpl(url, { headers: this.headers({ accept }), redirect: "follow" });
       if (res.status === 401 || res.status === 403 || res.url.includes("/sign-in")) throw new SessionExpiredError(`HTTP ${res.status} en ${path}`);
       if (res.ok) return res;
       last = res;
-      if (res.status < 500) break;
-      const wait = this.delays.retryBaseMs * (i + 1);
-      this.log(`  ${res.status} en ${path} — reintento en ${wait}ms`);
+      if (res.status !== 429 && res.status < 500) break;
+      const retryAfter = Number(res.headers.get("retry-after")) * 1000;
+      const wait = res.status === 429 ? Math.max(retryAfter || 0, this.delays.retryBaseMs * 2 ** (i + 1)) : this.delays.retryBaseMs * (i + 1);
+      this.log(`  ${res.status} en ${path.replace(/^https?:\/\/[^/]+/, "")} — reintento en ${wait}ms`);
       await sleep(wait);
     }
     throw new Error(`HTTP ${last?.status} en ${path}`);
@@ -232,13 +237,22 @@ export async function ingestSubstack(opts: IngestOptions): Promise<IngestReport>
     { kind: "traffic", file: "traffic.csv", run: () => client.traffic() },
     { kind: "paid_subscriber_growth", file: "paid_subscriber_growth.csv", run: () => client.paidSubscriberGrowth() },
     { kind: "subscriber_totals", file: "subscriber_totals.csv", run: () => client.subscriberTotals() },
+    {
+      kind: "notes",
+      file: "notes.json",
+      run: async () => {
+        const bundle = await collectNotes(client, { log });
+        if (bundle.errors.length) log(`  ${bundle.errors.length} peticiones de notas fallaron (se conserva el resto)`);
+        return JSON.stringify(bundle);
+      },
+    },
   ];
 
   for (const step of steps) {
     try {
       log(`→ ${step.kind}`);
       const text = await step.run();
-      if (text.trim().split(/\r?\n/).length < 2) throw new Error("respuesta vacía");
+      if (!step.file.endsWith(".json") && text.trim().split(/\r?\n/).length < 2) throw new Error("respuesta vacía");
       const path = join(opts.rawDir, step.file);
       writeFileSync(path, text, "utf8");
       report.downloaded.push({ kind: step.kind, path, bytes: Buffer.byteLength(text) });

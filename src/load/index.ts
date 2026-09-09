@@ -1,4 +1,5 @@
-import { readdirSync, statSync, mkdtempSync } from "node:fs";
+import { readdirSync, statSync, mkdtempSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, extname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import AdmZip from "adm-zip";
@@ -15,6 +16,8 @@ import {
   loadTraffic,
   type LoadResult,
 } from "./loaders.js";
+import { loadNotes } from "./notes.js";
+import type { NotesBundle } from "../ingest/notes.js";
 
 export interface FileReport {
   path: string;
@@ -45,6 +48,28 @@ export function collectCsvPaths(dir: string): string[] {
     }
   }
   return out;
+}
+
+/** Bundles JSON (hoy solo `kind: "notes"`) que acompañan a los CSV en el directorio crudo. */
+function loadJsonBundles(db: Db, runId: number, dir: string, files: FileReport[], insRaw: ReturnType<Db["prepare"]>) {
+  for (const name of readdirSync(dir)) {
+    if (extname(name).toLowerCase() !== ".json") continue;
+    const path = join(dir, name);
+    const rep: FileReport = { path, kind: "unknown", rows: 0 };
+    try {
+      const buf = readFileSync(path);
+      const data = JSON.parse(buf.toString("utf8")) as Partial<NotesBundle>;
+      if (data.kind === "notes" && Array.isArray(data.notes)) {
+        rep.kind = "notes";
+        rep.rows = data.notes.length;
+        insRaw.run(runId, "notes", path, createHash("sha256").update(buf).digest("hex"), rep.rows);
+        rep.result = loadNotes(db, runId, data as NotesBundle);
+      } else rep.error = "JSON sin `kind` reconocido; no cargado";
+    } catch (e) {
+      rep.error = String(e);
+    }
+    files.push(rep);
+  }
 }
 
 /** El orden importa: posts antes que email_stats (join); el resto es independiente. */
@@ -124,6 +149,8 @@ export function loadDirectory(db: Db, dir: string): RunReport {
     }
     files.push(rep);
   }
+
+  loadJsonBundles(db, runId, dir, files, insRaw);
 
   const loaded = files.filter((f) => f.result).length;
   const failed = files.filter((f) => f.error && f.kind !== "unknown").length;

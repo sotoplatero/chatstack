@@ -48,8 +48,11 @@ Qué descarga cada sync (a `data/raw/<timestamp>/`):
 | `traffic.csv` | `stats/publication_traffic/timeseries` en tramos de 90 días | Vistas diarias |
 | `paid_subscriber_growth.csv` | `stats/paid_subscriber_growth?period=day` | Altas de pago, upgrades, trials, cancelaciones por día |
 | `subscriber_totals.csv` | `stats/emails/timeseries?resolution=day` | Total de suscriptores por día |
+| `notes.json` | `reader/feed/profile/{user_id}` paginado + por nota `comment/{id}/reactors`, `comment/{id}/restackers`, `reader/comment/{id}/replies`, `note_stats/c-{id}` | **Tus Notes y quién interactúa**: cada like, restack y respuesta con la persona (nombre, handle, publicación, si te sigue). `note_stats` (impresiones) solo cuando Substack ya lo publicó (~24h) |
 
-Los endpoints devuelven 503 esporádicos; el cliente reintenta con espera creciente. Si Substack
+Los endpoints devuelven 503 esporádicos y `substack.com` limita por ritmo (429); el cliente
+va de una en una con pausa y reintenta con espera creciente. Un sync completo con ~230 notas
+tarda unos 3-4 minutos. Si Substack
 cambia alguno, el resto se descarga igual y el run queda `partial`.
 
 **Manual (`load`)** — cualquier CSV/ZIP exportado a mano desde el panel, en una carpeta:
@@ -88,6 +91,8 @@ Para Claude Desktop, en `claude_desktop_config.json`:
 - "¿Quiénes son los mejores candidatos a pasar a pago?"
 - "¿De dónde vinieron las altas de agosto?"
 - "¿Quién se dio de baja desde el último sync?"
+- "¿Quién interactúa más con mis Notes? ¿Y quién las restackea?"
+- "¿Qué Note tuvo más respuestas y quién respondió?"
 
 ## Herramientas MCP
 
@@ -100,6 +105,9 @@ Para Claude Desktop, en `claude_desktop_config.json`:
 | `get_post_performance` | Posts con views, open_rate, signups, subscribes |
 | `get_growth` | Altas por fuente y series diarias free/paid, agrupadas |
 | `get_churn` | Bajas y transiciones de plan entre syncs |
+| `get_notes_performance` | Tus Notes con likes, restacks, respuestas, personas únicas y adjuntos |
+| `get_note_engagers` | Quién interactúa más con tus Notes, con desglose y `matched_subscriber_email` (por nombre) |
+| `get_note` | Una Note con su texto, stats y cada like/restack/respuesta con la persona |
 | `get_schema` | Tablas, DDL y conteos |
 | `query_sql` | SELECT libre, solo lectura, LIMIT 200 por defecto |
 
@@ -107,6 +115,10 @@ Para Claude Desktop, en `claude_desktop_config.json`:
 emails abiertos (7d/30d/6mo), post views, clicks y días activos. El loader lo guarda normalizado en `extra`
 (`activity`, `emails_opened_30d`, `days_active_30d`, …) y `find_upgrade_candidates` ordena por eso. Si la BD
 solo tiene el export legado (sin engagement), la tool degrada a antigüedad y lo declara en `method`.
+
+**Notes y suscriptores son mundos distintos en Substack**: quien da like es un usuario de
+substack.com (id, nombre, handle), y el export de suscriptores da emails. No hay clave común;
+`matched_subscriber_email` casa por nombre exacto y es una pista, no una certeza.
 
 ## Histórico
 
