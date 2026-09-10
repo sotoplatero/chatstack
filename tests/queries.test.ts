@@ -90,6 +90,18 @@ describe("queries", () => {
     expect(c.churned[0].email).toBe("gone@x.com");
   });
 
+  it("query_sql permite funciones escalares y busquedas de texto con palabras clave", () => {
+    // `replace()` y `char()` son funciones de SQLite, no escritura.
+    expect(q.querySql(db, "SELECT replace('a-b', '-', ' ') AS r").rows).toEqual([{ r: "a b" }]);
+    // Una palabra vetada dentro de un literal no debe bloquear la consulta.
+    expect(q.querySql(db, "SELECT COUNT(*) AS n FROM subscribers WHERE email LIKE '%update%'").rows).toEqual([{ n: 0 }]);
+    expect(q.querySql(db, "SELECT ';' AS s").rows).toEqual([{ s: ";" }]);
+    // Pero la sentencia sigue vetada fuera de literales.
+    expect(() => q.querySql(db, "SELECT 1 FROM subscribers UNION SELECT 1; DROP TABLE posts")).toThrow();
+    expect(() => q.querySql(db, "WITH x AS (SELECT 1) REPLACE INTO subscribers VALUES (1)")).toThrow(/escritura/);
+    expect(() => q.querySql(db, "SELECT load_extension('evil')")).toThrow(/escritura/);
+  });
+
   it("query_sql solo lectura", () => {
     expect(q.querySql(db, "SELECT COUNT(*) AS n FROM subscribers").rows).toEqual([{ n: 4 }]);
     expect(q.querySql(db, "select email from subscribers").truncated_at).toBe(200);

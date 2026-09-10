@@ -254,16 +254,31 @@ export function getSchema(db: Db) {
   return { tables: tables.map((t) => ({ name: t.name, rows: counts[t.name], ddl: t.sql })) };
 }
 
-const FORBIDDEN = /\b(insert|update|delete|drop|alter|create|replace|attach|detach|pragma|vacuum|reindex)\b/i;
+/**
+ * Palabras que solo pueden ser sentencias, nunca funciones ni columnas. `replace` NO está: es una
+ * función escalar legítima de SQLite (`replace(body, x, y)`), así que se veta solo `REPLACE INTO`.
+ */
+const FORBIDDEN = /\b(insert|update|delete|drop|alter|create|attach|detach|pragma|vacuum|reindex|load_extension)\b|\breplace\s+into\b/i;
+
+/** Vacía literales de texto e identificadores citados para que su contenido no dispare el filtro. */
+function stripLiterals(sql: string): string {
+  return sql
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/"(?:[^"]|"")*"/g, '""')
+    .replace(/`(?:[^`]|``)*`/g, "``")
+    .replace(/\[[^\]]*\]/g, "[]");
+}
 
 export function querySql(db: Db, sql: string, maxRows = 200) {
   const trimmed = sql.trim().replace(/;+$/, "");
-  if (!/^\s*(select|with)\b/i.test(trimmed)) throw new Error("Solo se permiten sentencias SELECT / WITH.");
-  if (FORBIDDEN.test(trimmed)) throw new Error("La consulta contiene palabras clave de escritura; solo lectura.");
-  if (trimmed.includes(";")) throw new Error("Una sola sentencia por consulta.");
-  const limited = /\blimit\b/i.test(trimmed) ? trimmed : `${trimmed} LIMIT ${maxRows}`;
-  const rows = db.prepare(limited).all();
-  return { row_count: rows.length, truncated_at: /\blimit\b/i.test(trimmed) ? null : maxRows, rows };
+  // El filtro mira la consulta sin literales: buscar la palabra "update" en un texto es legítimo.
+  const bare = stripLiterals(trimmed);
+  if (!/^\s*(select|with)\b/i.test(bare)) throw new Error("Solo se permiten sentencias SELECT / WITH.");
+  if (FORBIDDEN.test(bare)) throw new Error("La consulta contiene palabras clave de escritura; solo lectura.");
+  if (bare.includes(";")) throw new Error("Una sola sentencia por consulta.");
+  const hasLimit = /\blimit\b/i.test(bare);
+  const rows = db.prepare(hasLimit ? trimmed : `${trimmed} LIMIT ${maxRows}`).all();
+  return { row_count: rows.length, truncated_at: hasLimit ? null : maxRows, rows };
 }
 
 function withExtra<T extends Record<string, unknown>>(row: T): T {
