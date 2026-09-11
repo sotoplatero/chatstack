@@ -66,11 +66,18 @@ de suscriptores como el legado (`email,active_subscription,…`). Recargar no du
 
 ### 2. Conectar a Claude Code
 
-```bash
-claude mcp add constack -- node --no-warnings=ExperimentalWarning C:/Users/soto/projects/constack/dist/cli.js mcp --db C:/Users/soto/projects/constack/data/constack.db
+`constack` se usa como **skill** (`chatstack`), no como MCP: así no ocupa contexto en las sesiones
+que no van de Substack. La fuente vive en `skills/chatstack/` y se enlaza a la carpeta de skills
+del usuario con un *junction* de Windows (no necesita permisos de administrador):
+
+```powershell
+New-Item -ItemType Junction -Path "$HOME\.claude\skills\chatstack" -Target "C:\Users\soto\projects\constack\skills\chatstack"
 ```
 
-Para Claude Desktop, en `claude_desktop_config.json`:
+Al ser un enlace y no una copia, editar `skills/chatstack/SKILL.md` en el repo actualiza el skill
+al instante. El skill invoca los comandos `q` y `sql` de abajo.
+
+El servidor MCP sigue existiendo (`node dist/cli.js mcp`) por si lo prefieres en Claude Desktop:
 
 ```json
 {
@@ -84,6 +91,18 @@ Para Claude Desktop, en `claude_desktop_config.json`:
 }
 ```
 
+### 2b. Consultar desde la terminal
+
+```bash
+node dist/cli.js q overview
+node dist/cli.js q note-engagers --limit 10 --kind reply
+node dist/cli.js q subscribers --plan free --active true --limit 20
+node dist/cli.js sql "SELECT source, COUNT(*) n FROM subscribers GROUP BY source ORDER BY n DESC"
+```
+
+`q` sin argumentos (o con un nombre inexistente) lista las consultas disponibles con sus flags.
+Todo sale como JSON por stdout; los errores de uso salen con código 2.
+
 ### 3. Preguntar
 
 - "¿Cuántos suscriptores activos tengo y cuántos de pago?"
@@ -96,20 +115,22 @@ Para Claude Desktop, en `claude_desktop_config.json`:
 
 ## Herramientas MCP
 
-| Tool | Qué hace |
+Las mismas consultas están disponibles como `constack q <nombre>` y como tools MCP:
+
+| `q <nombre>` / tool MCP | Qué hace |
 |---|---|
-| `get_overview` | Totales, reparto por plan, altas 30/90d, último sync |
-| `list_subscribers` | Contactos con filtros (plan, activo, fechas, email) y paginación |
-| `get_subscriber` | Ficha de un email + historial de plan por sync |
-| `find_upgrade_candidates` | Free activos ordenados como candidatos a pago (ver nota) |
-| `get_post_performance` | Posts con views, open_rate, signups, subscribes |
-| `get_growth` | Altas por fuente y series diarias free/paid, agrupadas |
-| `get_churn` | Bajas y transiciones de plan entre syncs |
-| `get_notes_performance` | Tus Notes con likes, restacks, respuestas, personas únicas y adjuntos |
-| `get_note_engagers` | Quién interactúa más con tus Notes, con desglose y `matched_subscriber_email` (por nombre) |
-| `get_note` | Una Note con su texto, stats y cada like/restack/respuesta con la persona |
-| `get_schema` | Tablas, DDL y conteos |
-| `query_sql` | SELECT libre, solo lectura, LIMIT 200 por defecto |
+| `overview` | Totales, reparto por plan, altas 30/90d, último sync |
+| `subscribers` | Contactos con filtros (plan, activo, fechas, email) y paginación |
+| `subscriber` | Ficha de un email + historial de plan por sync |
+| `candidates` | Free activos ordenados como candidatos a pago (ver nota) |
+| `posts` | Posts con views, open_rate, signups, subscribes |
+| `growth` | Altas por fuente y series diarias free/paid, agrupadas |
+| `churn` | Bajas y transiciones de plan entre syncs |
+| `notes` | Tus Notes con likes, restacks, respuestas, personas únicas y adjuntos |
+| `note-engagers` | Quién interactúa más con tus Notes, con desglose y `matched_subscriber_email` (por nombre) |
+| `note` | Una Note con su texto, stats y cada like/restack/respuesta con la persona |
+| `schema` | Tablas, DDL y conteos |
+| `sql` | SELECT libre, solo lectura, LIMIT 200 por defecto |
 
 **Engagement por contacto**: el export "todas las columnas" de Audiencia → Exportar trae `Activity` (0-5),
 emails abiertos (7d/30d/6mo), post views, clicks y días activos. El loader lo guarda normalizado en `extra`
@@ -132,7 +153,10 @@ evolución real de tu lista, algo que ningún CSV suelto te da.
 src/db       esquema SQLite y helpers
 src/load     detección de CSV por cabeceras + loaders idempotentes
 src/ingest   cliente HTTP de los endpoints del panel + manejo de la cookie de sesión
-src/mcp      queries puras + registro de tools MCP
+src/queries.ts      consultas puras sobre la BD (las usan el CLI y el MCP)
+src/queryCommand.ts despacho de `constack q <nombre> --flags`
+src/mcp      registro de tools MCP sobre src/queries.ts
+skills/chatstack    el skill (enlazado a ~/.claude/skills/chatstack)
 tests        vitest con fixtures sintéticos
 data/        BD y exports crudos (ignorado por git)
 ```

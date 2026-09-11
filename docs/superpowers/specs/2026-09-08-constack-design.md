@@ -51,6 +51,19 @@ trae `Activity` (0-5), emails abiertos 7d/30d/6mo, post views, clicks y días ac
 contacto. El loader lo normaliza a claves estables en `extra` y `find_upgrade_candidates`
 ordena por ellas; con el export legado (sin engagement) degrada a antigüedad y lo declara.
 
+## De MCP a skill (decisión 2026-09-10)
+El consumo principal pasa a ser el skill `chatstack`, no el servidor MCP: las 12 tools del MCP
+ocupaban contexto en todas las sesiones, también las que no van de Substack, mientras que un skill
+se carga solo al invocarse. Las consultas se extraen a `src/queries.ts` (ya no son código del MCP)
+y se exponen por CLI en `src/queryCommand.ts` como `constack q <nombre> --flags` más `constack sql`.
+El servidor MCP se conserva para Claude Desktop pero se desregistra de Claude Code.
+La fuente del skill vive en `skills/chatstack/` y se enlaza a `~/.claude/skills/chatstack` con un
+junction de Windows (no requiere admin y refleja las ediciones del repo sin recopiar).
+
+`q` y `sql` no pasan por `parseArgs`: sus flags son abiertas y `parseArgs` aborta ante opciones no
+declaradas. Los tests de `tests/cli.test.ts` ejecutan el binario real porque ese fallo era invisible
+a las pruebas unitarias del despachador.
+
 ## Notes (añadido 2026-09-09)
 Tablas `notes`, `note_actors`, `note_interactions` (nota × persona × like|restack|reply).
 Fuente: `substack.com/api/v1/reader/feed/profile/{user_id}` (paginado por cursor; se descartan
