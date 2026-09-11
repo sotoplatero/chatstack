@@ -1,42 +1,105 @@
 ---
 name: chatstack
 description: >-
-  Responde cualquier pregunta sobre el Substack del usuario consultando su base
-  de datos local: cuántos suscriptores tiene y de dónde vienen, quién abre sus
-  correos y quién no, quién es candidato a pasar a pago, qué posts convierten
-  mejor, quién se dio de baja, y quién da like, restackea o responde a sus
-  Notes. Úsalo SIEMPRE que el usuario pregunte por sus suscriptores, su
-  newsletter, sus lectores, sus aperturas, su crecimiento, sus altas o bajas,
-  sus posts o sus notas de Substack — incluso si no dice "Substack", basta con
-  que hable de "mis suscriptores", "mi newsletter", "quién me lee" o "mis
-  notas". También para refrescar los datos ("actualiza", "sincroniza") y para
-  saber cuándo fue el último sync. No sirve para publicar ni modificar nada en
-  Substack: es de solo lectura.
+  Responde preguntas sobre el Substack del usuario consultando una base de datos
+  local con sus suscriptores, posts, crecimiento y Notes: cuántos suscriptores
+  tiene y de dónde vienen, quién abre sus correos y quién no, quién es candidato
+  a pasar a pago, qué posts convierten mejor, quién se dio de baja, y quién da
+  like, restackea o responde a sus notas. Úsalo SIEMPRE que pregunte por sus
+  suscriptores, su newsletter, sus lectores, sus aperturas, su crecimiento, sus
+  altas o bajas, sus posts o sus notas — basta con que diga "mis suscriptores",
+  "mi newsletter", "quién me lee" o "mis notas", sin nombrar Substack. También
+  para conectar su cuenta la primera vez y para refrescar los datos
+  ("actualiza", "sincroniza"). Es de solo lectura: no publica ni modifica nada.
 ---
 
-# chatstack — preguntar a tus datos de Substack
+# chatstack
 
-Base SQLite local en `C:/Users/soto/projects/constack/data/constack.db`, con suscriptores
-(incluido su engagement individual), posts, crecimiento por fuente, tráfico y Notes con
-quién interactúa en cada una. Todo local; nada sale de la máquina.
+Tus datos de Substack en una base SQLite local que puedes preguntar en lenguaje natural.
+Todo se queda en la máquina del usuario: no hay servidor, no se envía nada a ningún sitio.
 
-## Cómo ejecutar
+## El comando
 
-Desde cualquier carpeta, con rutas absolutas:
+El binario está junto a este archivo. Defínelo una vez por sesión con la ruta absoluta del
+directorio del skill (te la dan al cargarlo, como «Base directory for this skill»):
 
 ```bash
-CS="node --no-warnings=ExperimentalWarning C:/Users/soto/projects/constack/dist/cli.js"
-CSDB="--db C:/Users/soto/projects/constack/data/constack.db"
-$CS q overview $CSDB
+CS="node --no-warnings=ExperimentalWarning <SKILL_DIR>/bin/chatstack.cjs"
+$CS status
 ```
 
-Todo sale como JSON por stdout. `--no-warnings=ExperimentalWarning` evita el aviso de
-`node:sqlite` en stderr. Sin `--db`, el CLI busca `./data/constack.db` relativo al cwd, así que
-**pasa siempre `--db` salvo que estés dentro del repo**.
+Requiere **Node 22.13 o superior** (usa `node:sqlite`, así no hay que compilar nada).
+Si `node --version` es menor, dilo y para: nada más va a funcionar.
 
-## Consultas con nombre
+Datos y configuración viven en `~/.chatstack/` (`config.json`, `auth.json`, `chatstack.db`, `raw/`).
 
-`$CS q <consulta> [--flags] $CSDB`
+## Si ya está conectado
+
+`$CS status` lo dice. Si `connected` es `true`, salta directo a **Consultas**. Antes de responder,
+mira `last_sync` en `$CS q overview`: si es de hace días, dilo u ofrece sincronizar.
+
+## Conectar por primera vez
+
+Dos vías. **Elige tú según lo que haya disponible, no preguntes al usuario cuál prefiere.**
+
+### Vía A — con Claude in Chrome
+
+Úsala si en esta sesión existen herramientas `mcp__claude-in-chrome__*`. El usuario no toca nada y
+su cookie no se copia a ningún archivo: el navegador ya está autenticado y las peticiones salen
+desde la propia página.
+
+Pregunta el subdominio si no lo sabes (o léelo de `~/.chatstack/config.json`). Luego:
+
+**1. Estadísticas de la publicación**
+
+- `navigate` a `https://<subdominio>.substack.com/publish/home`
+- `javascript_tool` con el contenido de **`<SKILL_DIR>/browser/01-publication.js`**.
+  Devuelve enseguida `{arrancado}`: el trabajo sigue en la página.
+- **Sondea** `window.__chatstack` cada ~15 s hasta que `listo` sea `true` (mira `fase` y `progreso`
+  para informar). Tarda hasta un minuto, sobre todo esperando el export de suscriptores.
+- Cuando esté listo, lee `window.__chatstack.datos`, guárdalo con Write en
+  `<carpeta temporal>/chatstack-publication.json` y ejecuta `$CS load <carpeta temporal>`.
+
+**2. El CSV de suscriptores** (el que trae el engagement individual)
+
+`window.__chatstack.datos.email_list_url` trae un enlace absoluto. No se puede leer con `fetch`
+—redirige a S3 y CORS lo corta—, así que hay que descargarlo: `navigate` a esa URL. Chrome lo
+guarda en Descargas; muévelo a la carpeta temporal y vuelve a ejecutar `$CS load`.
+
+**3. Notes**
+
+- `navigate` a `https://substack.com`
+- `javascript_tool` con **`<SKILL_DIR>/browser/02-notes.js`**, y sondea igual.
+  Con 200+ notas tarda varios minutos: `progreso` va marcando `hechas/total`.
+- Lee `window.__chatstack.datos`, guárdalo como `chatstack-notes.json` en la carpeta temporal y
+  `$CS load <carpeta temporal>`.
+
+Los datos vuelven por el resultado del tool (unos 100-150 KB en total), no por descargas: Chrome
+bloquea en silencio las descargas automáticas repetidas de un sitio, y era la parte más frágil.
+
+### Vía B — sin Chrome: el usuario copia el cURL
+
+1. Pídele que abra en Chrome `https://<su-subdominio>.substack.com/publish/home`, ya logueado.
+2. `F12` → pestaña **Network** → recargar con `Ctrl+R`.
+3. Clic derecho en la **primera petición** (el documento) → **Copy** → **Copy as cURL (bash)**.
+4. Que lo pegue en un archivo de texto y te pase **la ruta** (no el contenido: lleva su sesión).
+5. `$CS connect --cookies <ruta>`
+
+`connect` verifica la sesión y detecta la publicación antes de guardar nada. Si administra varias,
+las lista: repite con `--sub <subdominio>`. Luego `$CS sync` lo descarga todo (3-4 minutos).
+
+**Dile que borre el archivo del cURL al terminar**: contiene su sesión.
+
+## Refrescar
+
+Con sesión guardada (vía B): `$CS sync`. Si dice que caducó, repetir `connect` con un cURL nuevo.
+Con la vía A: repetir sus tres pasos. La vía B es más barata para sincronizar a menudo — no gasta
+contexto — así que si el usuario va a hacerlo con frecuencia, merece la pena que conecte una vez
+con el cURL aunque tenga la extensión.
+
+## Consultas
+
+`$CS q <consulta> [--flags]` — todo sale como JSON por stdout.
 
 | Consulta | Qué devuelve | Flags |
 |---|---|---|
@@ -52,26 +115,23 @@ Todo sale como JSON por stdout. `--no-warnings=ExperimentalWarning` evita el avi
 | `note` | Una Note con su texto y cada interacción con su persona | `--id 332284631` |
 | `schema` | Tablas, DDL y conteos | — |
 
-Un nombre equivocado imprime la lista de nombres válidos. Un flag fuera de la lista cerrada
-falla con el valor esperado, en vez de colarse al SQL.
+Un nombre equivocado imprime la lista de nombres válidos; un flag fuera de su lista cerrada dice
+qué se esperaba. Los errores de uso salen con código 2.
 
 ## SQL libre
 
-Para lo que las consultas con nombre no cubren:
-
 ```bash
-$CS sql "SELECT source, COUNT(*) n FROM subscribers WHERE is_active=1 GROUP BY source ORDER BY n DESC" $CSDB
+$CS sql "SELECT source, COUNT(*) n FROM subscribers WHERE is_active=1 GROUP BY source ORDER BY n DESC"
 ```
 
 Solo `SELECT`/`WITH`, una sentencia, `LIMIT 200` por defecto (`--max-rows N` lo sube).
-`replace()`, `char()` y buscar palabras como `'%update%'` dentro de literales funcionan.
 
 ### Esquema
 
 ```
 subscribers        email(PK), subscribed_at, source, is_active, plan, plan_since,
                    unsubscribed_at, extra(JSON)
-subscriber_snapshots  run_id, email, is_active, plan   -- un snapshot por sync: de aquí sale el histórico
+subscriber_snapshots  run_id, email, is_active, plan   -- un snapshot por sync: de aquí el histórico
 posts              post_id(PK), title, subtitle, post_date, is_published, type, audience, slug
 post_email_stats   post_id, run_id, title, post_date, views, open_rate, engagement_rate,
                    signups, subscribes, estimated_value
@@ -98,30 +158,25 @@ json_extract(extra,'$.name')
 json_extract(extra,'$."Unique emails seen (6mo)"')  -- correos DISTINTOS abiertos
 ```
 
-Para "¿quién ha abierto todos mis correos?" compara `Unique emails seen (6mo)` con
-`emails_received_6mo`, no las aperturas totales.
+Para «¿quién ha abierto todos mis correos?» compara `Unique emails seen (6mo)` con
+`emails_received_6mo`, nunca las aperturas totales.
 
-## Refrescar los datos
+## Cuatro cosas que no debes afirmar de más
 
-```bash
-cd C:/Users/soto/projects/constack && node --no-warnings=ExperimentalWarning dist/cli.js sync --sub sotoplatero
-```
-
-Tarda 3-4 minutos (Substack limita el ritmo en Notes). Si dice que la sesión caducó, el usuario
-tiene que dar un cURL nuevo: en Chrome, en `https://sotoplatero.substack.com/publish/home`,
-F12 → Network → recargar → clic derecho en la primera petición → Copy as cURL (bash), guardarlo
-en un archivo y pasar `--cookies <archivo>`. Ese archivo contiene su sesión: bórralo al terminar.
-
-Antes de responder, mira `last_sync` de `overview`: si es de hace días, dilo u ofrece sincronizar.
-
-## Tres cosas que no debes afirmar de más
-
-1. **Substack no dice quién LEE tus Notes.** Solo quién interactúa (like, restack, respuesta).
-   "Quién lee mis notas" no tiene respuesta; "quién interactúa" sí, con `note-engagers`.
+1. **Substack no dice quién LEE las Notes.** Solo quién interactúa (like, restack, respuesta).
+   «Quién lee mis notas» no tiene respuesta; «quién interactúa» sí, con `note-engagers`.
 2. **`matched_subscriber_email` casa por nombre exacto**, porque Substack no revela el email de
    quien da like. Es una pista, no una certeza — dilo cuando la uses.
-3. **Los suscriptores nuevos no tienen histórico.** Las transiciones de plan y las bajas salen de
-   comparar snapshots entre syncs, así que `churn` necesita al menos dos syncs para decir algo.
+3. **`churn` necesita al menos dos syncs**: las bajas y los cambios de plan salen de comparar
+   snapshots, no de un campo que Substack entregue.
+4. **Las fechas de la base son UTC.** Al hablar de «ayer» o de la hora de una nota, conviértelas a
+   la zona del usuario.
 
-Las fechas de la BD son UTC. El usuario está en America/New_York (UTC−4 en verano): al hablar de
-"ayer" o de la hora de una nota, convierte.
+## Si algo falla
+
+- `connected: false` o «la sesión ha caducado» → volver a conectar (vía A o B).
+- Un `sync` puede acabar `partial`: Substack devuelve 503 y 429 esporádicos. Lo descargado se carga
+  igual; repetir más tarde completa el resto.
+- En la vía A, si `window.__chatstack.error` trae algo, cuéntalo tal cual y ofrece la vía B.
+- Substack cambia sus endpoints internos sin avisar. Si una descarga concreta falla siempre, dilo
+  claramente en vez de inventar el dato que falta.

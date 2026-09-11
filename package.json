@@ -1,7 +1,7 @@
 {
-  "name": "constack",
-  "version": "1.0.0",
-  "description": "",
+  "name": "chatstack",
+  "version": "0.1.0",
+  "description": "Tus datos de Substack en una base local que puedes preguntar en lenguaje natural",
   "main": "index.js",
   "directories": {
     "doc": "docs",
@@ -9,16 +9,18 @@
   },
   "scripts": {
     "test": "vitest run",
-    "build": "tsc",
+    "build": "tsc && npm run build:browser && npm run build:skill",
     "dev": "tsx src/cli.ts",
-    "mcp": "node --no-warnings=ExperimentalWarning dist/cli.js mcp"
+    "mcp": "node --no-warnings=ExperimentalWarning dist/cli.js mcp",
+    "build:browser": "node scripts/build-browser.mjs",
+    "build:skill": "node scripts/build-skill.mjs"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "bin": {
-    "constack": "./dist/cli.js"
+    "chatstack": "./skills/chatstack/bin/chatstack.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -29,6 +31,7 @@
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
     "@types/node": "^26.5.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"

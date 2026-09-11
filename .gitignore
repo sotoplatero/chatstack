@@ -1,6 +1,15 @@
 node_modules/
 dist/
+
+# Datos y sesión del usuario: viven en ~/.chatstack, nunca en el repo.
 data/
 *.curl
+auth.json
 substack-auth.json
+*.db
+*.db-wal
+*.db-shm
 .env
+
+# `skills/chatstack/bin/` y `skills/chatstack/browser/` SÍ se versionan: son lo que se instala.
+# La carpeta del skill tiene que ser autocontenida al copiarla.

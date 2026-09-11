@@ -51,6 +51,49 @@ trae `Activity` (0-5), emails abiertos 7d/30d/6mo, post views, clicks y días ac
 contacto. El loader lo normaliza a claves estables en `extra` y `find_upgrade_candidates`
 ordena por ellas; con el export legado (sin engagement) degrada a antigüedad y lo declara.
 
+## Skill compartible (2026-09-11)
+
+Objetivo: que cualquiera lo instale, no solo el autor. Tres cambios:
+
+- **Los datos salen del repo** a `~/.chatstack/` (`config.json`, `auth.json`, `chatstack.db`,
+  `raw/`), resuelto con `os.homedir()`. `CHATSTACK_HOME` lo redirige en los tests.
+- **`chatstack connect`** verifica la sesión contra `/api/v1/user/profile/self` y detecta la
+  publicación ANTES de escribir nada: un cURL caducado falla en dos segundos, no a mitad de una
+  descarga de cuatro minutos. Con varias publicaciones las lista y no elige por su cuenta.
+- **El skill es autocontenido**: esbuild mete el CLI en un solo `.cjs` (242 KB) dentro de
+  `skills/chatstack/bin/`. Instalar = copiar la carpeta. CJS y no ESM porque `adm-zip` usa
+  `require` dinámico; extensión `.cjs` explícita para no depender del `package.json` de al lado.
+  El SDK de MCP queda fuera del bundle: `src/cli.ts` lo carga con import dinámico.
+
+### La vía del navegador, y las cuatro paredes que tiene
+
+Con Claude in Chrome no hace falta cookie: el navegador ya está autenticado y los `fetch` salen
+desde la página. Comprobado contra Chrome real, en este orden:
+
+1. **`substack.sid` es `HttpOnly`**: JavaScript no puede leerla. Da igual — no hace falta.
+2. **CORS** impide llamar a `substack.com` desde `<sub>.substack.com`. Se resuelve navegando: las
+   estadísticas se piden desde el subdominio y las Notes desde `substack.com`.
+3. **Chrome bloquea en silencio las descargas automáticas repetidas** de un sitio, y la decisión
+   persiste. El primer diseño bajaba 6 CSV y no llegó ninguno. Ahora no se descarga nada: el
+   resultado vuelve por `window.__chatstack.datos` y lo escribe Claude (~100-150 KB).
+4. **`javascript_tool` corta a los 45 s** y recorrer 200+ notas tarda minutos. Por eso los snippets
+   ARRANCAN el trabajo y devuelven enseguida; la página sigue sola y Claude sondea
+   `window.__chatstack` hasta `listo`.
+
+Excepción que no se pudo salvar: el CSV de suscriptores redirige a S3, así que `fetch` no puede
+leerlo. Se entrega su URL y se descarga navegando a ella.
+
+`note_stats` se reduce a sus cifras: en crudo son ~12 KB por nota (series temporales que nadie
+consulta) y el bundle pasaría de 100 KB a 2 MB.
+
+Se descartó enviar los datos a un servidor local (`127.0.0.1`): Chrome cuelga la petición por las
+restricciones de red pública→privada. Probado, no funciona.
+
+### Coste de cada vía
+La vía del navegador no necesita cookie pero gasta contexto en cada sync (los datos pasan por el
+resultado del tool). La del cURL gasta cero contexto y puede correr desatendida. Por eso el skill
+recomienda conectar con cURL a quien vaya a sincronizar a menudo, aunque tenga la extensión.
+
 ## De MCP a skill (decisión 2026-09-10)
 El consumo principal pasa a ser el skill `chatstack`, no el servidor MCP: las 12 tools del MCP
 ocupaban contexto en todas las sesiones, también las que no van de Substack, mientras que un skill

@@ -1,4 +1,4 @@
-import { readdirSync, statSync, mkdtempSync, readFileSync } from "node:fs";
+import { readdirSync, statSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, extname, basename } from "node:path";
 import { tmpdir } from "node:os";
@@ -50,20 +50,45 @@ export function collectCsvPaths(dir: string): string[] {
   return out;
 }
 
-/** Bundles JSON (hoy solo `kind: "notes"`) que acompañan a los CSV en el directorio crudo. */
-function loadJsonBundles(db: Db, runId: number, dir: string, files: FileReport[], insRaw: ReturnType<Db["prepare"]>) {
+/**
+ * Bundles JSON que acompañan a los CSV en el directorio crudo:
+ *  - `kind: "notes"`            — notas e interacciones (lo produce la ingesta y el navegador).
+ *  - `kind: "chatstack-files"`  — varios CSV dentro de un solo archivo. La vía del navegador lo usa
+ *    porque Chrome bloquea las descargas automáticas múltiples: un archivo, una descarga.
+ */
+function loadJsonBundles(
+  db: Db,
+  runId: number,
+  dir: string,
+  files: FileReport[],
+  insRaw: ReturnType<Db["prepare"]>,
+) {
   for (const name of readdirSync(dir)) {
     if (extname(name).toLowerCase() !== ".json") continue;
     const path = join(dir, name);
     const rep: FileReport = { path, kind: "unknown", rows: 0 };
     try {
       const buf = readFileSync(path);
-      const data = JSON.parse(buf.toString("utf8")) as Partial<NotesBundle>;
+      const data = JSON.parse(buf.toString("utf8")) as { kind?: string; notes?: unknown; files?: Record<string, string> };
+      const sha = createHash("sha256").update(buf).digest("hex");
       if (data.kind === "notes" && Array.isArray(data.notes)) {
         rep.kind = "notes";
         rep.rows = data.notes.length;
-        insRaw.run(runId, "notes", path, createHash("sha256").update(buf).digest("hex"), rep.rows);
+        insRaw.run(runId, "notes", path, sha, rep.rows);
         rep.result = loadNotes(db, runId, data as NotesBundle);
+      } else if (data.kind === "chatstack-files" && data.files && typeof data.files === "object") {
+        // Se materializan a un directorio temporal para reusar tal cual la ruta de CSV.
+        const tmp = mkdtempSync(join(tmpdir(), "chatstack-bundle-"));
+        const written: string[] = [];
+        for (const [fileName, content] of Object.entries(data.files)) {
+          if (typeof content !== "string") continue;
+          const p = join(tmp, basename(fileName));
+          writeFileSync(p, content, "utf8");
+          written.push(p);
+        }
+        insRaw.run(runId, "chatstack-files", path, sha, written.length);
+        files.push(...loadCsvPaths(db, runId, written, insRaw));
+        continue; // sus CSV ya se reportan uno a uno; el contenedor no añade una fila propia
       } else rep.error = "JSON sin `kind` reconocido; no cargado";
     } catch (e) {
       rep.error = String(e);
@@ -93,12 +118,10 @@ interface Parsed {
   error?: string;
 }
 
-export function loadDirectory(db: Db, dir: string): RunReport {
-  const runId = startRun(db, dir);
-  const files: FileReport[] = [];
-  const insRaw = db.prepare("INSERT INTO raw_files (run_id, kind, path, sha256, row_count) VALUES (?, ?, ?, ?, ?)");
-
-  const parsed: Parsed[] = collectCsvPaths(dir).map((path) => {
+/** Parsea, ordena y carga un conjunto de rutas CSV dentro de un run ya abierto. */
+function loadCsvPaths(db: Db, runId: number, paths: string[], insRaw: ReturnType<Db["prepare"]>): FileReport[] {
+  const out: FileReport[] = [];
+  const parsed: Parsed[] = paths.map((path) => {
     try {
       const { rows, headers, sha256 } = readCsv(path);
       return { path, rows, sha256, kind: detectKind(headers) };
@@ -139,16 +162,22 @@ export function loadDirectory(db: Db, dir: string): RunReport {
           case "subscriber_totals":
             rep.result = loadSubscriberTotals(db, runId, f.rows);
             break;
-          case "unknown":
+          default:
             rep.error = "cabeceras no reconocidas; archivo registrado pero no cargado";
-            break;
         }
       } catch (e) {
         rep.error = String(e);
       }
     }
-    files.push(rep);
+    out.push(rep);
   }
+  return out;
+}
+
+export function loadDirectory(db: Db, dir: string): RunReport {
+  const runId = startRun(db, dir);
+  const insRaw = db.prepare("INSERT INTO raw_files (run_id, kind, path, sha256, row_count) VALUES (?, ?, ?, ?, ?)");
+  const files: FileReport[] = loadCsvPaths(db, runId, collectCsvPaths(dir), insRaw);
 
   loadJsonBundles(db, runId, dir, files, insRaw);
 

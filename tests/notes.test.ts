@@ -59,6 +59,45 @@ describe("collectNotes", () => {
   });
 });
 
+describe("bundle chatstack-files (vía navegador)", () => {
+  it("materializa los CSV que trae dentro y los carga como si fueran archivos sueltos", () => {
+    const dir = mkdtempSync(join(tmpdir(), "constack-bundle-"));
+    writeFileSync(
+      join(dir, "chatstack-publication.json"),
+      JSON.stringify({
+        kind: "chatstack-files",
+        fetched_at: "2026-09-11T00:00:00.000Z",
+        files: {
+          "email_list.csv": "Email,Name,Type,Start date,Cancel date\nana@x.com,Ana,Free,2026-06-01,\n",
+          "traffic.csv": "Date,Views\n2026/06/11,7\n",
+          "no-es-csv.txt": "se ignora",
+        },
+      }),
+    );
+    const db = openDb(":memory:");
+    const rep = loadDirectory(db, dir);
+    expect(rep.status).toBe("ok");
+    // El contenedor no aparece como fila propia: se reportan sus CSV uno a uno.
+    expect(rep.files.map((f) => f.kind).sort()).toEqual(["email_list", "traffic", "unknown"]);
+    expect(db.prepare("SELECT email FROM subscribers").get()).toEqual({ email: "ana@x.com" });
+    expect(db.prepare("SELECT date, views FROM traffic").get()).toEqual({ date: "2026-06-11", views: 7 });
+    // Queda registrado de qué archivo salió cada cosa.
+    expect(db.prepare("SELECT kind FROM raw_files WHERE kind = 'chatstack-files'").get()).toEqual({ kind: "chatstack-files" });
+  });
+
+  it("un JSON con kind desconocido no rompe la carga", () => {
+    const dir = mkdtempSync(join(tmpdir(), "constack-bundle-"));
+    writeFileSync(join(dir, "otra-cosa.json"), JSON.stringify({ kind: "vete-a-saber" }));
+    writeFileSync(join(dir, "traffic.csv"), "Date,Views\n2026/06/11,7\n");
+    const db = openDb(":memory:");
+    const rep = loadDirectory(db, dir);
+    // Un archivo de más se reporta, pero no degrada el run: lo reconocido se carga igual.
+    expect(rep.status).toBe("ok");
+    expect(rep.files.find((f) => f.path.endsWith("otra-cosa.json"))!.error).toMatch(/kind/);
+    expect(db.prepare("SELECT COUNT(*) c FROM traffic").get()).toEqual({ c: 1 });
+  });
+});
+
 describe("loadNotes + queries", () => {
   it("carga el bundle, es idempotente y responde quién interactúa más", async () => {
     const client = new SubstackClient("x", "substack.sid=s", () => {}, fakeNotesApi(), { retryBaseMs: 1, pollMs: 1, pauseMs: 0 });

@@ -1,6 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { collectNotes } from "./notes.js";
+import {
+  DEFAULT_FROM, PUB, SUBSCRIBER_EXPORT_COLUMNS, SUBSCRIBER_SET_QUERY, dateChunks, pubOrigin, today,
+} from "./endpoints.js";
+
+export { SUBSCRIBER_EXPORT_COLUMNS, dateChunks };
 
 /**
  * Cliente HTTP contra los endpoints internos del panel de Substack, autenticado con la
@@ -36,22 +41,6 @@ export interface IngestReport {
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 
-/** Columnas del export "todas las columnas" de Audiencia → Exportar (incluye engagement por contacto). */
-export const SUBSCRIBER_EXPORT_COLUMNS = [
-  "user_email_address", "user_name", "subscription_type", "activity_rating", "subscription_created_at",
-  "total_revenue_generated", "num_comments", "num_comments_last_7d", "num_comments_last_30d", "num_shares",
-  "num_shares_last_7d", "num_shares_last_30d", "country", "state", "num_emails_received", "num_emails_dropped",
-  "num_emails_opened", "num_email_opens", "num_email_opens_last_7d", "num_email_opens_last_30d", "last_opened_at",
-  "links_clicked", "last_clicked_at", "num_unique_email_posts_seen", "num_unique_email_posts_seen_last_7d",
-  "num_unique_email_posts_seen_last_30d", "num_web_post_views", "num_web_post_views_last_7d",
-  "num_web_post_views_last_30d", "num_unique_web_posts_seen", "num_unique_web_posts_seen_last_7d",
-  "num_unique_web_posts_seen_last_30d", "num_subs_gifted", "subscription_expires_at", "free_attribution",
-  "paid_attribution", "days_active_last_30d", "first_payment_at", "last_subscribed_at", "unsubscribed_at",
-  "emails_enabled", "bestseller_tier", "stripe_plan_name", "group_membership",
-];
-
-const EMAIL_STATS_COLUMNS = ["title", "post_date", "audience", "views", "engagement_rate", "signups", "subscribes", "estimated_value", "open_rate"];
-
 export class SessionExpiredError extends Error {}
 
 export class SubstackClient {
@@ -65,7 +54,7 @@ export class SubstackClient {
     fetchImpl?: typeof fetch,
     delays: Partial<Delays> = {},
   ) {
-    this.base = `https://${subdomain}.substack.com`;
+    this.base = pubOrigin(subdomain);
     this.fetchImpl = fetchImpl ?? fetch;
     this.delays = { ...DEFAULT_DELAYS, ...delays };
   }
@@ -112,16 +101,15 @@ export class SubstackClient {
   }
 
   emailStats() {
-    const q = EMAIL_STATS_COLUMNS.map((c) => `columns%5B%5D=${c}`).join("&");
-    return this.csv(`/api/v1/publication/stats/email_stats?format=csv&${q}`);
+    return this.csv(PUB.emailStats());
   }
 
   /** Substack agrega por mes si el rango es amplio; se pide en tramos de 90 días para conservar el detalle diario. */
-  async traffic(from = "2024-01-01", to = today()) {
+  async traffic(from = DEFAULT_FROM, to = today()) {
     let header = "";
     const lines: string[] = [];
     for (const [a, b] of dateChunks(from, to, 90)) {
-      const text = await this.csv(`/api/v1/publication/stats/publication_traffic/timeseries?from=${a}&to=${b}&format=csv`);
+      const text = await this.csv(PUB.traffic(a, b));
       const [h, ...rows] = text.trim().split(/\r?\n/);
       header ||= h;
       lines.push(...rows.filter(Boolean));
@@ -129,29 +117,27 @@ export class SubstackClient {
     return `${header}\n${lines.join("\n")}\n`;
   }
 
-  growthSources(from = "2024-01-01", to = today()) {
-    return this.csv(`/api/v1/publication/stats/growth/sources?from_date=${from}&to_date=${to}&format=csv`);
+  growthSources(from = DEFAULT_FROM, to = today()) {
+    return this.csv(PUB.growthSources(from, to));
   }
 
-  paidSubscriberGrowth(from = "2024-01-01", to = today()) {
-    return this.csv(`/api/v1/publication/stats/paid_subscriber_growth?start=${from}&end=${to}&period=day&format=csv`);
+  paidSubscriberGrowth(from = DEFAULT_FROM, to = today()) {
+    return this.csv(PUB.paidSubscriberGrowth(from, to));
   }
 
   /** Serie diaria de suscriptores totales. Substack la devuelve sin cabecera; se la añadimos. */
-  async subscriberTotals(from = "2024-01-01") {
-    const body = await this.csv(`/api/v1/publication/stats/emails/timeseries?from=${from}T00:00:00.000Z&format=csv&resolution=day`);
+  async subscriberTotals(from = DEFAULT_FROM) {
+    const body = await this.csv(PUB.subscriberTotals(from));
     return `date,total_subscribers\n${body.trim()}\n`;
   }
 
   /** Export completo de suscriptores: crea un set, pide el export, sondea hasta tener URL y descarga. */
   async subscriberExport(maxPolls = 60): Promise<string> {
-    const set = await this.postJson<{ id: number }>("/api/v1/subscriber_set", {
-      query: { order_by_desc_nulls_last: "subscription_created_at" },
-    });
+    const set = await this.postJson<{ id: number }>(PUB.subscriberSet(), { query: SUBSCRIBER_SET_QUERY });
     if (!set?.id) throw new Error(`subscriber_set sin id: ${JSON.stringify(set).slice(0, 200)}`);
-    const exp = await this.postJson<Record<string, unknown>>("/api/v1/subscriber_set/export", {
+    const exp = await this.postJson<Record<string, unknown>>(PUB.subscriberExport(), {
       subscriberSetId: set.id,
-      columns: SUBSCRIBER_EXPORT_COLUMNS,
+      columns: [...SUBSCRIBER_EXPORT_COLUMNS],
     });
     const exportId = (exp.id ?? exp.exportId ?? exp.export_id) as string | undefined;
     let fileUrl = exp.url as string | undefined;
@@ -160,7 +146,7 @@ export class SubstackClient {
       // Mientras el export se genera, el endpoint de estado responde 400; se sondea hasta que trae `url`.
       for (let i = 0; i < maxPolls && !fileUrl; i++) {
         await sleep(this.delays.pollMs);
-        const res = await this.fetchImpl(`${this.base}/api/v1/subscriber_set/export/${exportId}`, {
+        const res = await this.fetchImpl(this.base + PUB.subscriberExportStatus(exportId), {
           headers: this.headers({ accept: "application/json" }),
         });
         if (res.status === 401 || res.status === 403) throw new SessionExpiredError(`HTTP ${res.status} consultando el export`);
@@ -177,7 +163,7 @@ export class SubstackClient {
   async postsCsv(): Promise<string> {
     const rows: string[][] = [];
     for (let offset = 0; ; offset += 50) {
-      const page = (await (await this.get(`/api/v1/archive?sort=new&limit=50&offset=${offset}`, "application/json")).json()) as ArchivePost[];
+      const page = (await (await this.get(PUB.archive(offset), "application/json")).json()) as ArchivePost[];
       if (!Array.isArray(page) || page.length === 0) break;
       for (const p of page) {
         rows.push([
@@ -200,23 +186,6 @@ interface ArchivePost {
 
 function csvCell(v: string): string {
   return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-}
-
-/** Pares [desde, hasta] consecutivos de `days` días que cubren [from, to]. */
-export function dateChunks(from: string, to: string, days: number): [string, string][] {
-  const out: [string, string][] = [];
-  let a = new Date(from + "T00:00:00Z");
-  const end = new Date(to + "T00:00:00Z");
-  while (a <= end) {
-    const b = new Date(Math.min(a.getTime() + (days - 1) * 86_400_000, end.getTime()));
-    out.push([a.toISOString().slice(0, 10), b.toISOString().slice(0, 10)]);
-    a = new Date(b.getTime() + 86_400_000);
-  }
-  return out;
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function sleep(ms: number) {

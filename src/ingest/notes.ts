@@ -6,7 +6,9 @@ import type { SubstackClient } from "./substack.js";
  * Substack tarda ~24h en habilitarlo por nota y responde `{"error":""}` mientras tanto.
  */
 
-const ROOT = "https://substack.com/api/v1";
+import { SOCIAL, SOCIAL_ORIGIN } from "./endpoints.js";
+
+const ROOT = SOCIAL_ORIGIN;
 
 export interface NoteActor {
   id: number;
@@ -70,7 +72,7 @@ function toActor(u: RawUser): NoteActor {
 }
 
 export async function fetchSelfUserId(client: SubstackClient): Promise<number> {
-  const me = (await (await client.get(`${ROOT}/user/profile/self`, "application/json")).json()) as { id?: number };
+  const me = (await (await client.get(ROOT + SOCIAL.self(), "application/json")).json()) as { id?: number };
   if (!me?.id) throw new Error("no pude obtener el id de usuario (user/profile/self)");
   return me.id;
 }
@@ -80,8 +82,7 @@ export async function fetchOwnNotes(client: SubstackClient, userId: number, maxP
   const out: RawUser[] = [];
   let cursor = "";
   for (let page = 0; page < maxPages; page++) {
-    const suffix = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-    const payload = (await (await client.get(`${ROOT}/reader/feed/profile/${userId}${suffix}`, "application/json")).json()) as {
+    const payload = (await (await client.get(ROOT + SOCIAL.profileFeed(userId, cursor), "application/json")).json()) as {
       items?: RawUser[];
       nextCursor?: string;
     };
@@ -101,8 +102,7 @@ async function fetchReplies(client: SubstackClient, noteId: number): Promise<Not
   const out: NoteReply[] = [];
   let cursor = "";
   for (let i = 0; i < 50; i++) {
-    const suffix = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-    const payload = (await (await client.get(`${ROOT}/reader/comment/${noteId}/replies${suffix}`, "application/json")).json()) as {
+    const payload = (await (await client.get(ROOT + SOCIAL.replies(noteId, cursor), "application/json")).json()) as {
       commentBranches?: { comment: RawUser; descendantComments?: RawUser[] }[];
       nextCursor?: string;
     };
@@ -130,7 +130,7 @@ async function fetchReplies(client: SubstackClient, noteId: number): Promise<Not
 
 async function fetchNoteStats(client: SubstackClient, noteId: number): Promise<unknown | null> {
   try {
-    const res = await client.get(`${ROOT}/note_stats/c-${noteId}`, "application/json", 1);
+    const res = await client.get(ROOT + SOCIAL.noteStats(noteId), "application/json", 1);
     const j = (await res.json()) as Record<string, unknown>;
     return j && !("error" in j) ? j : null;
   } catch {
@@ -176,11 +176,11 @@ export async function collectNotes(
       // Sin likes/restacks/respuestas no hay nada que pedir: ahorra 3 peticiones por nota vacía.
       if (rec.reaction_count > 0)
         await step("reactors", async () => {
-          rec.reactors = ((await (await client.get(`${ROOT}/comment/${id}/reactors`, "application/json")).json()) as RawUser[]).map(toActor);
+          rec.reactors = ((await (await client.get(ROOT + SOCIAL.reactors(id), "application/json")).json()) as RawUser[]).map(toActor);
         });
       if (rec.restacks > 0)
         await step("restackers", async () => {
-          rec.restackers = ((await (await client.get(`${ROOT}/comment/${id}/restackers`, "application/json")).json()) as RawUser[])
+          rec.restackers = ((await (await client.get(ROOT + SOCIAL.restackers(id), "application/json")).json()) as RawUser[])
             .map(toActor)
             .filter((a) => a.id !== userId); // tu propio restack no es interacción ajena
         });
