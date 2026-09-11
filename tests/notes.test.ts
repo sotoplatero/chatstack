@@ -6,7 +6,7 @@ import { openDb } from "../src/db/index.js";
 import { loadDirectory } from "../src/load/index.js";
 import { collectNotes, type NotesBundle } from "../src/ingest/notes.js";
 import { SubstackClient } from "../src/ingest/substack.js";
-import * as q from "../src/mcp/queries.js";
+import * as q from "../src/queries.js";
 
 const ME = 43892226;
 const ana = { id: 1, name: "Ana Pérez", handle: "ana", photo_url: null, primary_publication: { subdomain: "anapost", name: "Ana Post" }, is_following: true, is_subscribed: false };

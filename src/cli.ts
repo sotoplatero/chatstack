@@ -7,8 +7,10 @@ import { loadDirectory, type RunReport } from "./load/index.js";
 import { ingestSubstack } from "./ingest/substack.js";
 import { cookieFromCurl, loadAuth, saveAuth } from "./ingest/auth.js";
 import { serveStdio } from "./mcp/server.js";
+import { helpText, parseFlags, runQuery, UsageError } from "./queryCommand.js";
+import { querySql } from "./queries.js";
 
-const HELP = `constack — MCP server local para tus datos de Substack
+const HELP = `constack — tus datos de Substack en una base local que puedes consultar
 
 Uso:
   constack sync   --sub <subdominio> [--cookies <archivo.curl>] [--db <ruta>] [--data <dir>]
@@ -17,6 +19,13 @@ Uso:
                   la sesión queda en <data>/substack-auth.json para los siguientes syncs.
   constack load   <carpeta> [--db <ruta>]
                   Carga CSV/ZIP exportados a mano desde el panel de Substack.
+  constack q <consulta> [--flags]   [--db <ruta>]
+                  Consulta la BD y escribe JSON en stdout. Consultas:
+${helpText()}
+
+  constack sql "<SELECT ...>"       [--db <ruta>] [--max-rows N]
+                  SELECT de solo lectura sobre la BD (LIMIT 200 por defecto).
+
   constack mcp    [--db <ruta>]
                   Arranca el MCP server (stdio). Conéctalo a Claude Code:
                   claude mcp add constack -- node <ruta>/dist/cli.js mcp --db <ruta>/data/constack.db
@@ -24,8 +33,40 @@ Uso:
 Variables de entorno: CONSTACK_DB, CONSTACK_DATA, CONSTACK_SUB
 `;
 
+/** `:memory:` no es una ruta: resolverla la convertiría en un archivo dentro del cwd. */
+function resolveDb(db: string | undefined, dataDir: string): string {
+  const v = db ?? process.env.CONSTACK_DB;
+  if (v === ":memory:") return v;
+  return resolve(v ?? join(dataDir, "constack.db"));
+}
+
 async function main() {
+  const argv = process.argv.slice(2);
+  const cmd = argv[0];
+  const log = (m: string) => process.stderr.write(m + "\n");
+
+  // `q` y `sql` llevan flags libres (--limit, --sort, --kind…) que parseArgs rechazaría por no
+  // estar declaradas, así que se parsean a mano antes de llegar a él.
+  if (cmd === "q" || cmd === "sql") {
+    const name = argv[1];
+    const flags = parseFlags(argv.slice(2));
+    const dataDir = resolve(typeof flags.data === "string" ? flags.data : (process.env.CONSTACK_DATA ?? "data"));
+    const dbPath = resolveDb(typeof flags.db === "string" ? flags.db : undefined, dataDir);
+    if (!name) {
+      log(cmd === "q" ? `Falta la consulta: constack q <consulta>\n\n${helpText()}` : 'Falta la consulta: constack sql "SELECT ..."');
+      process.exit(2);
+    }
+    const db = openDb(dbPath);
+    const result =
+      cmd === "q"
+        ? runQuery(db, name, flags)
+        : querySql(db, name, typeof flags["max-rows"] === "string" ? Number(flags["max-rows"]) : 200);
+    process.stdout.write(JSON.stringify(result, null, 1) + "\n");
+    return;
+  }
+
   const { values, positionals } = parseArgs({
+    args: argv,
     allowPositionals: true,
     options: {
       db: { type: "string" },
@@ -35,14 +76,12 @@ async function main() {
       help: { type: "boolean", short: "h" },
     },
   });
-  const cmd = positionals[0];
   if (!cmd || values.help) {
     process.stdout.write(HELP);
     process.exit(cmd ? 0 : 1);
   }
   const dataDir = resolve(values.data ?? process.env.CONSTACK_DATA ?? "data");
-  const dbPath = resolve(values.db ?? process.env.CONSTACK_DB ?? join(dataDir, "constack.db"));
-  const log = (m: string) => process.stderr.write(m + "\n");
+  const dbPath = resolveDb(values.db, dataDir);
 
   switch (cmd) {
     case "mcp": {
@@ -109,5 +148,6 @@ function printReport(rep: RunReport, log: (m: string) => void) {
 
 main().catch((e) => {
   process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(1);
+  // Un error de uso (flag mal puesto, consulta inexistente) no es un fallo del programa.
+  process.exit(e instanceof UsageError ? 2 : 1);
 });

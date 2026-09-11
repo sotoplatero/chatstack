@@ -1,4 +1,4 @@
-import type { Db } from "../db/index.js";
+import type { Db } from "./db/index.js";
 
 /** Consultas puras sobre la BD. Sin MCP aquí para poder probarlas con una BD en memoria. */
 

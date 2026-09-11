@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb, type Db } from "../src/db/index.js";
 import { loadDirectory } from "../src/load/index.js";
-import * as q from "../src/mcp/queries.js";
+import * as q from "../src/queries.js";
 
 const V1 = `email,active_subscription,expiry,plan,email_disabled,created_at,first_payment_at
 old@x.com,false,,other,false,2025-01-01T00:00:00.000Z,
