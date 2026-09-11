@@ -6429,6 +6429,12 @@ Todo vive en ~/.chatstack (config.json, auth.json, chatstack.db, raw/).
 Variables: CHATSTACK_HOME, CHATSTACK_DB, CHATSTACK_SUB.
 `;
 async function main() {
+  for (const s of [process.stdout, process.stderr]) {
+    s.on("error", (e) => {
+      if (e.code === "EPIPE") process.exit(0);
+      throw e;
+    });
+  }
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const log = (m) => process.stderr.write(m + "\n");

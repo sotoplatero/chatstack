@@ -24,28 +24,34 @@ ningún sitio. La base es un archivo en `~/.chatstack/`.
 | **Notes** | Tus notas y **quién da like, quién restackea y quién responde**, con su nombre, su publicación y si te sigue |
 | **Histórico** | Cada sync guarda un snapshot: de comparar snapshots salen los upgrades, los downgrades y las bajas |
 
-## Instalar
+## Instalar como skill de Claude Code
 
-Requiere **Node 22.13 o superior** (usa `node:sqlite`; no hay nada que compilar).
+chatstack es un **skill**: se instala dejando una carpeta dentro de `~/.claude/skills/` y Claude lo
+carga solo cuando le preguntas algo de tu newsletter. No hay que registrar ningún servidor MCP.
+
+Requiere **Node 22.13 o superior** (`node --version`). Usa `node:sqlite`, así que no hay nada que
+compilar ni ningún `npm install`.
+
+**macOS / Linux** — dos líneas:
 
 ```bash
-git clone https://github.com/<tu-usuario>/chatstack
+git clone https://github.com/sotoplatero/chatstack.git ~/chatstack
+ln -s ~/chatstack/skills/chatstack ~/.claude/skills/chatstack
 ```
 
-Y enlaza la carpeta del skill a tus skills de Claude Code:
-
-```bash
-# macOS / Linux
-ln -s "$PWD/chatstack/skills/chatstack" ~/.claude/skills/chatstack
-```
+**Windows (PowerShell)** — el junction no pide permisos de administrador:
 
 ```powershell
-# Windows (junction: no necesita permisos de administrador)
-New-Item -ItemType Junction -Path "$HOME\.claude\skills\chatstack" -Target "$PWD\chatstack\skills\chatstack"
+git clone https://github.com/sotoplatero/chatstack.git $HOME\chatstack
+New-Item -ItemType Junction -Path "$HOME\.claude\skills\chatstack" -Target "$HOME\chatstack\skills\chatstack"
 ```
 
-También vale copiar `skills/chatstack/` a `~/.claude/skills/`: la carpeta es autocontenida, el
-binario viaja dentro y no necesita `npm install`.
+**Sin git**: descarga el ZIP del repo y copia la carpeta `skills/chatstack` dentro de
+`~/.claude/skills/`. Es autocontenida — el binario viaja dentro.
+
+Para comprobar que quedó bien, abre Claude Code y pregúntale *«¿cuántos suscriptores tengo?»*:
+debería ofrecerse a conectar tu Substack. Al enlazarlo en vez de copiarlo, un `git pull` actualiza
+el skill sin tocar nada más.
 
 ## Conectar tu Substack
 

@@ -65,6 +65,17 @@ describe("CLI", () => {
     expect(r.stderr).toMatch(/debe ser uno de/);
   });
 
+  it("no vuelca un EPIPE cuando cierran la salida (`| head`)", () => {
+    // `chatstack q ... | head` es de lo más común y cierra stdout a media escritura.
+    const cli = CLI.split("\\").join("/");
+    const r = spawnSync("bash", ["-c", `"${process.execPath}" --import tsx --no-warnings "${cli}" q overview --db :memory: | head -2`], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(r.stderr ?? "").not.toMatch(/EPIPE|Unhandled|throw er/);
+    expect(r.stdout ?? "").toContain("{");
+  });
+
   it("`--db :memory:` no se convierte en una ruta del disco", () => {
     const r = run("q", "overview", "--db", ":memory:");
     expect(r.status).toBe(0);

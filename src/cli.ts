@@ -35,6 +35,13 @@ Variables: CHATSTACK_HOME, CHATSTACK_DB, CHATSTACK_SUB.
 `;
 
 async function main() {
+  // `chatstack q ... | head` cierra la salida antes de tiempo: sin esto Node vuelca un EPIPE feo.
+  for (const s of [process.stdout, process.stderr]) {
+    s.on("error", (e: NodeJS.ErrnoException) => {
+      if (e.code === "EPIPE") process.exit(0);
+      throw e;
+    });
+  }
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const log = (m: string) => process.stderr.write(m + "\n");
