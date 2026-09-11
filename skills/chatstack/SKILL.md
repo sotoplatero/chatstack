@@ -74,8 +74,10 @@ guarda en Descargas; muévelo a la carpeta temporal y vuelve a ejecutar `$CS loa
 - Lee `window.__chatstack.datos`, guárdalo como `chatstack-notes.json` en la carpeta temporal y
   `$CS load <carpeta temporal>`.
 
-Los datos vuelven por el resultado del tool (unos 100-150 KB en total), no por descargas: Chrome
-bloquea en silencio las descargas automáticas repetidas de un sitio, y era la parte más frágil.
+Los datos vuelven por el resultado del tool, no por descargas: Chrome bloquea en silencio las
+descargas automáticas repetidas de un sitio, y era la parte más frágil. **Cuesta contexto**: las
+estadísticas rondan los 25 KB, pero el bundle de Notes puede pasar de 400 KB con 200+ notas. Avisa
+al usuario antes del paso 3 y, si va a sincronizar a menudo, recomiéndale conectar con la vía B.
 
 ### Vía B — sin Chrome: el usuario copia el cURL
 

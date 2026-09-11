@@ -83,8 +83,13 @@ desde la página. Comprobado contra Chrome real, en este orden:
 Excepción que no se pudo salvar: el CSV de suscriptores redirige a S3, así que `fetch` no puede
 leerlo. Se entrega su URL y se descarga navegando a ella.
 
-`note_stats` se reduce a sus cifras: en crudo son ~12 KB por nota (series temporales que nadie
-consulta) y el bundle pasaría de 100 KB a 2 MB.
+`note_stats` se reduce a sus cifras (impresiones, superficies, audiencia, interacciones): en crudo
+son ~12 KB por nota por las series temporales, y el bundle pasaría de 416 KB a ~2 MB. Medido con
+235 notas reales: 416 KB con las cifras compactadas.
+
+Coste medido de la vía del navegador: 25 KB las estadísticas, 416 KB las Notes. Lo primero es
+gratis a efectos prácticos; lo segundo cuesta contexto en cada sync y por eso el skill recomienda
+la vía del cURL a quien sincronice a menudo.
 
 Se descartó enviar los datos a un servidor local (`127.0.0.1`): Chrome cuelga la petición por las
 restricciones de red pública→privada. Probado, no funciona.
