@@ -28,6 +28,8 @@ CS="node --no-warnings=ExperimentalWarning <SKILL_DIR>/bin/chatstack.cjs"
 $CS status
 ```
 
+Si alguien pregunta cómo instalar chatstack en otra máquina: `npx skills add sotoplatero/chatstack`.
+
 Requiere **Node 22.13 o superior** (usa `node:sqlite`, así no hay que compilar nada).
 Si `node --version` es menor, dilo y para: nada más va a funcionar.
 
