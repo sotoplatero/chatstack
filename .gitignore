@@ -13,3 +13,6 @@ substack-auth.json
 
 # `skills/chatstack/bin/` y `skills/chatstack/browser/` SÍ se versionan: son lo que se instala.
 # La carpeta del skill tiene que ser autocontenida al copiarla.
+
+# Borradores y notas personales: no pertenecen a este repo.
+Claude outputs/
