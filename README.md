@@ -24,34 +24,45 @@ ningún sitio. La base es un archivo en `~/.chatstack/`.
 | **Notes** | Tus notas y **quién da like, quién restackea y quién responde**, con su nombre, su publicación y si te sigue |
 | **Histórico** | Cada sync guarda un snapshot: de comparar snapshots salen los upgrades, los downgrades y las bajas |
 
-## Instalar como skill de Claude Code
+## Instalar
 
-chatstack es un **skill**: se instala dejando una carpeta dentro de `~/.claude/skills/` y Claude lo
-carga solo cuando le preguntas algo de tu newsletter. No hay que registrar ningún servidor MCP.
-
-Requiere **Node 22.13 o superior** (`node --version`). Usa `node:sqlite`, así que no hay nada que
-compilar ni ningún `npm install`.
-
-**macOS / Linux** — dos líneas:
+chatstack es un **skill**: no hay que registrar ningún servidor MCP.
 
 ```bash
+npx skills add sotoplatero/chatstack
+```
+
+Eso es todo. Sirve para Claude Code, Cursor, Codex, Cline y el resto de agentes que soporta
+[`skills`](https://github.com/vercel-labs/skills). Añade `-g` para instalarlo globalmente o `-p`
+para dejarlo solo en el proyecto actual.
+
+Único requisito: **Node 22.13 o superior** (`node --version`). Usa `node:sqlite`, así que no hay
+nada que compilar ni ningún `npm install`.
+
+<details>
+<summary>Instalar a mano, sin el CLI de skills</summary>
+
+La carpeta `skills/chatstack` es autocontenida (SKILL.md + el binario + los snippets), así que
+basta con dejarla donde tu agente busca los skills:
+
+```bash
+# macOS / Linux
 git clone https://github.com/sotoplatero/chatstack.git ~/chatstack
 ln -s ~/chatstack/skills/chatstack ~/.claude/skills/chatstack
 ```
 
-**Windows (PowerShell)** — el junction no pide permisos de administrador:
-
 ```powershell
+# Windows (junction: no pide permisos de administrador)
 git clone https://github.com/sotoplatero/chatstack.git $HOME\chatstack
 New-Item -ItemType Junction -Path "$HOME\.claude\skills\chatstack" -Target "$HOME\chatstack\skills\chatstack"
 ```
 
-**Sin git**: descarga el ZIP del repo y copia la carpeta `skills/chatstack` dentro de
-`~/.claude/skills/`. Es autocontenida — el binario viaja dentro.
+Enlazado en vez de copiado, un `git pull` lo actualiza sin tocar nada más.
 
-Para comprobar que quedó bien, abre Claude Code y pregúntale *«¿cuántos suscriptores tengo?»*:
-debería ofrecerse a conectar tu Substack. Al enlazarlo en vez de copiarlo, un `git pull` actualiza
-el skill sin tocar nada más.
+</details>
+
+Para comprobar que quedó bien, abre tu agente y pregúntale *«¿cuántos suscriptores tengo?»*:
+debería ofrecerse a conectar tu Substack.
 
 ## Conectar tu Substack
 
