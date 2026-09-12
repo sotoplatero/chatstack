@@ -385,3 +385,42 @@ export function knownNotes(db: Db): { counts: Map<number, { reaction_count: numb
   }
   return { counts, withStats };
 }
+
+/**
+ * Qué datos hay y de qué sync vienen. Es lo que permite al skill darse cuenta por su cuenta de
+ * que falta algo —las notas, por ejemplo— y lanzar un sync sin que el usuario tenga que pedirlo.
+ */
+export interface Coverage {
+  dataset: string;
+  rows: number;
+  /** Sync del que provienen las filas, cuando la tabla lo registra. */
+  last_run_id: number | null;
+  present: boolean;
+}
+
+/** Tabla → cómo se llama de cara al usuario y de qué columna sale el run que la llenó. */
+const DATASETS: { dataset: string; table: string; runColumn?: string }[] = [
+  { dataset: "subscribers", table: "subscribers", runColumn: "last_synced_run_id" },
+  { dataset: "posts", table: "posts" },
+  { dataset: "post_stats", table: "post_email_stats", runColumn: "run_id" },
+  { dataset: "growth", table: "growth_sources", runColumn: "run_id" },
+  { dataset: "traffic", table: "traffic", runColumn: "run_id" },
+  { dataset: "subscriber_totals", table: "subscriber_totals", runColumn: "run_id" },
+  { dataset: "notes", table: "notes", runColumn: "last_synced_run_id" },
+  { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id" },
+];
+
+export function coverage(db: Db): Coverage[] {
+  return DATASETS.map(({ dataset, table, runColumn }) => {
+    const rows = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+    let last_run_id: number | null = null;
+    if (runColumn && rows > 0) {
+      const r = db.prepare(`SELECT MAX(${runColumn}) AS r FROM ${table}`).get() as { r: number | null };
+      last_run_id = r.r ?? null;
+    }
+    return { dataset, rows, last_run_id, present: rows > 0 };
+  });
+}
+
+/** Los conjuntos que están vacíos. Vacío = nunca se descargó, o el sync que lo traía falló. */
+export const missingDatasets = (db: Db): string[] => coverage(db).filter((c) => !c.present).map((c) => c.dataset);

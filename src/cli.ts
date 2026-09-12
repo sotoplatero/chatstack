@@ -6,7 +6,7 @@ import { loadDirectory, type RunReport } from "./load/index.js";
 import { ingestSubstack } from "./ingest/substack.js";
 import { cookieFromCurl, loadAuth } from "./ingest/auth.js";
 import { helpText, parseFlags, runQuery, UsageError } from "./queryCommand.js";
-import { knownNotes, querySql } from "./queries.js";
+import { coverage, knownNotes, missingDatasets, querySql } from "./queries.js";
 import { connect } from "./connect.js";
 import { acquireLock, isFresh, readLastSyncLog, relaunchDetached, releaseLock, writeSyncLog } from "./syncControl.js";
 import { authPath, stackchatHome, dbPath as resolveDbPath, loadConfig, rawDir, resolveSubdomain } from "./paths.js";
@@ -136,6 +136,9 @@ async function main() {
             db: dbFile,
             last_sync: last ?? null,
             last_background_sync: readLastSyncLog(),
+            // Qué hay y qué falta: el skill lo mira para lanzar un sync sin que se lo pidan.
+            coverage: coverage(db),
+            missing: missingDatasets(db),
           },
           null,
           1,

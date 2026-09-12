@@ -35,64 +35,104 @@ Si `node --version` es menor, dilo y para: nada más va a funcionar.
 
 Datos y configuración viven en `~/.stackchat/` (`config.json`, `auth.json`, `stackchat.db`, `raw/`).
 
-## Si ya está conectado
+## Antes de responder cualquier cosa
 
-`$CS status` lo dice. Si `connected` es `true`, salta directo a **Consultas**. Antes de responder,
-mira `last_sync` en `$CS q overview`: si es de hace días, dilo u ofrece sincronizar.
+Una llamada a `$CS status`. Es local y cuesta milisegundos. Te dice tres cosas:
 
-## Conectar por primera vez
+- `connected` — si hay sesión guardada.
+- `missing` — qué conjuntos de datos están vacíos.
+- `last_sync` y `last_background_sync` — cuándo se llenaron y si el último intento falló.
 
-Dos vías. **Elige tú según lo que haya disponible, no preguntes al usuario cuál prefiere.**
+Y decides con esta tabla, **sin preguntarle nada al usuario**:
 
-### Vía A — con Claude in Chrome
+| `status` dice | Qué haces |
+|---|---|
+| `connected: false` | Conectar (abajo). Es lo único que requiere al usuario. |
+| Falta lo que la pregunta necesita | `$CS sync --background` y **responde igual**, con lo que haya |
+| Todo presente pero `last_sync` de hace >6 h | `$CS sync --if-stale 6 --background` y responde sin esperar |
+| Todo presente y fresco | Responde y ya |
+| `last_background_sync` dice que falló | Dilo y ofrece reconectar. **No relances en bucle.** |
 
-Úsala si en esta sesión existen herramientas `mcp__claude-in-chrome__*`. El usuario no toca nada y
-su cookie no se copia a ningún archivo: el navegador ya está autenticado y las peticiones salen
-desde la propia página.
+`sync --background` devuelve en ~300 ms: se desasocia y sigue por su cuenta. **Nunca lo esperes,
+nunca sondees, nunca digas «dame un momento».** Responde con los datos que existan y añade una
+línea diciendo qué se está descargando. Cuando el usuario vuelva a preguntar, ya estará.
 
-Pregunta el subdominio si no lo sabes (o léelo de `~/.stackchat/config.json`). Luego:
+Un candado impide que se solapen dos syncs, así que puedes lanzarlo sin contar cuántas veces.
+
+### Qué dato necesita cada pregunta
+
+Solo lanza un sync si falta lo que hace falta para *esa* pregunta.
+
+| Si preguntan por… | Necesitas |
+|---|---|
+| cuántos suscriptores, quién abre, candidatos a pago, bajas | `subscribers` |
+| artículos, aperturas por post, qué convierte | `posts`, `post_stats` |
+| de dónde vienen las altas, tráfico, crecimiento | `growth`, `traffic`, `subscriber_totals` |
+| notas, quién da like, quién responde, quién restackea | `notes`, `note_interactions` |
+
+Se puede hablar de los artículos mientras las notas se descargan: son conjuntos independientes.
+
+## Conectar
+
+**Pide el cURL. Es la vía normal**, aunque tengas Chrome disponible: son cuatro pasos una sola vez
+en la vida, y a partir de ahí todo se sincroniza solo en segundo plano, en ~13 segundos y sin
+gastar contexto.
+
+1. Que abra en Chrome `https://<su-subdominio>.substack.com/publish/home`, ya logueado.
+2. `F12` → pestaña **Network** → recargar con `Ctrl+R`.
+3. Clic derecho en la **primera petición** (el documento) → **Copy** → **Copy as cURL (bash)**.
+4. Que lo pegue en un archivo de texto y te pase **la ruta** (no el contenido: lleva su sesión).
+5. `$CS connect --cookies <ruta>` y luego `$CS sync --background`.
+
+`connect` verifica la sesión y detecta la publicación antes de guardar nada. Si administra varias,
+las lista: repite con `--sub <subdominio>`. **Dile que borre el archivo al terminar**: lleva su sesión.
+
+El primer `sync` tarda 3-4 minutos porque recorre todas las notas. Lánzalo con `--background` y
+sigue atendiendo: las estadísticas y los suscriptores estarán en segundos, las notas al final.
+
+### Si se niega a tocar DevTools: la vía del navegador
+
+Solo entonces, y solo si existen herramientas `mcp__claude-in-chrome__*`. Funciona, pero exige que
+estés encima en cada sincronización, gasta contexto y abre ventanas de descarga. Adviértele de eso
+antes de empezar.
+
+Pregunta el subdominio si no lo sabes (o léelo de `~/.stackchat/config.json`).
 
 **1. Estadísticas de la publicación**
 
 - `navigate` a `https://<subdominio>.substack.com/publish/home`
 - `javascript_tool` con el contenido de **`<SKILL_DIR>/browser/01-publication.js`**.
-  Devuelve enseguida `{arrancado}`: el trabajo sigue en la página.
-- **Sondea** `window.__stackchat` cada ~15 s hasta que `listo` sea `true` (mira `fase` y `progreso`
-  para informar). Tarda hasta un minuto, sobre todo esperando el export de suscriptores.
-- Cuando esté listo, lee `window.__stackchat.datos`, guárdalo con Write en
+  Devuelve enseguida `{arrancado}`: la página sigue trabajando sola.
+- **No te quedes esperando.** Dile al usuario que tarda alrededor de un minuto y sigue atendiéndole.
+  Comprueba `window.__stackchat` cuando vuelvas a intervenir; si `listo` es `true`, recógelo.
+- Lee `window.__stackchat.datos`, guárdalo con Write en
   `<carpeta temporal>/stackchat-publication.json` y ejecuta `$CS load <carpeta temporal>`.
 
-**2. El CSV de suscriptores** (el que trae el engagement individual)
+**2. El CSV de suscriptores** — aquí hay una descarga del navegador, avísale
 
 `window.__stackchat.datos.email_list_url` trae un enlace absoluto. No se puede leer con `fetch`
-—redirige a S3 y CORS lo corta—, así que hay que descargarlo: `navigate` a esa URL. Chrome lo
-guarda en Descargas; muévelo a la carpeta temporal y vuelve a ejecutar `$CS load`.
+(redirige a S3 y CORS lo corta), así que hay que descargarlo navegando a esa URL.
+
+**Dile antes de hacerlo**: «voy a abrir el enlace del export; Chrome lo va a descargar, y si te
+pide permiso acéptalo». Después `navigate` a la URL, y **comprueba que el archivo llegó** a la
+carpeta de descargas antes de seguir. Si no aparece en unos segundos, díselo claramente: Chrome
+bloquea las descargas automáticas de un sitio tras la primera, y hace falta que lo permita a mano.
+No des por hecho que se descargó.
+
+Cuando esté, muévelo a la carpeta temporal y vuelve a ejecutar `$CS load`.
 
 **3. Notes**
 
 - `navigate` a `https://substack.com`
-- `javascript_tool` con **`<SKILL_DIR>/browser/02-notes.js`**, y sondea igual.
-  Con 200+ notas tarda varios minutos: `progreso` va marcando `hechas/total`.
-- Lee `window.__stackchat.datos`, guárdalo como `stackchat-notes.json` en la carpeta temporal y
-  `$CS load <carpeta temporal>`.
+- `javascript_tool` con **`<SKILL_DIR>/browser/02-notes.js`**.
+- Con 200+ notas tarda varios minutos. **Tampoco esperes**: avisa, sigue respondiendo, y recógelo
+  cuando vuelvas a intervenir. `progreso` marca `hechas/total` si quieres informar del avance.
+- Lee `window.__stackchat.datos`, guárdalo como `stackchat-notes.json` y `$CS load <carpeta>`.
 
-Los datos vuelven por el resultado del tool, no por descargas: Chrome bloquea en silencio las
-descargas automáticas repetidas de un sitio, y era la parte más frágil. **Cuesta contexto**: las
-estadísticas rondan los 25 KB, pero el bundle de Notes puede pasar de 400 KB con 200+ notas. Avisa
-al usuario antes del paso 3 y, si va a sincronizar a menudo, recomiéndale conectar con la vía B.
+Los datos vuelven por el resultado del tool, no por descargas. **Cuesta contexto**: las
+estadísticas rondan los 25 KB, pero el bundle de Notes pasa de 400 KB con 200+ notas.
 
-### Vía B — sin Chrome: el usuario copia el cURL
-
-1. Pídele que abra en Chrome `https://<su-subdominio>.substack.com/publish/home`, ya logueado.
-2. `F12` → pestaña **Network** → recargar con `Ctrl+R`.
-3. Clic derecho en la **primera petición** (el documento) → **Copy** → **Copy as cURL (bash)**.
-4. Que lo pegue en un archivo de texto y te pase **la ruta** (no el contenido: lleva su sesión).
-5. `$CS connect --cookies <ruta>`
-
-`connect` verifica la sesión y detecta la publicación antes de guardar nada. Si administra varias,
-las lista: repite con `--sub <subdominio>`. Luego `$CS sync` lo descarga todo (3-4 minutos).
-
-**Dile que borre el archivo del cURL al terminar**: contiene su sesión.
+**Al terminar, ofrécele pasar al cURL** para que los siguientes syncs sean automáticos.
 
 ## Refrescar
 
@@ -118,10 +158,9 @@ varias sesiones abiertas lancen syncs simultáneos.
 El resultado queda en `last_background_sync` de `$CS status`: **míralo antes de responder**. Si dice
 que falló porque la sesión caducó, avísale en vez de dar datos viejos en silencio.
 
-Si `sync` dice que la sesión caducó, hay que repetir `connect` con un cURL nuevo. Con la vía A,
-repetir sus tres pasos. La vía B es más barata para sincronizar a menudo —no gasta contexto—, así
-que si el usuario va a hacerlo con frecuencia merece la pena que conecte una vez con el cURL aunque
-tenga la extensión.
+Si `sync` dice que la sesión caducó, hay que repetir `connect` con un cURL nuevo. Quien conectara
+por el navegador no tiene sesión guardada y no puede usar `sync`: tendrá que repetir los tres pasos
+del navegador, o dar el cURL una vez y olvidarse.
 
 ## Consultas
 

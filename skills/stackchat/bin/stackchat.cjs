@@ -3042,11 +3042,33 @@ function knownNotes(db) {
   }
   return { counts, withStats };
 }
-var FORBIDDEN;
+function coverage(db) {
+  return DATASETS.map(({ dataset, table, runColumn }) => {
+    const rows = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+    let last_run_id = null;
+    if (runColumn && rows > 0) {
+      const r = db.prepare(`SELECT MAX(${runColumn}) AS r FROM ${table}`).get();
+      last_run_id = r.r ?? null;
+    }
+    return { dataset, rows, last_run_id, present: rows > 0 };
+  });
+}
+var FORBIDDEN, DATASETS, missingDatasets;
 var init_queries = __esm({
   "src/queries.ts"() {
     "use strict";
     FORBIDDEN = /\b(insert|update|delete|drop|alter|create|attach|detach|pragma|vacuum|reindex|load_extension)\b|\breplace\s+into\b/i;
+    DATASETS = [
+      { dataset: "subscribers", table: "subscribers", runColumn: "last_synced_run_id" },
+      { dataset: "posts", table: "posts" },
+      { dataset: "post_stats", table: "post_email_stats", runColumn: "run_id" },
+      { dataset: "growth", table: "growth_sources", runColumn: "run_id" },
+      { dataset: "traffic", table: "traffic", runColumn: "run_id" },
+      { dataset: "subscriber_totals", table: "subscriber_totals", runColumn: "run_id" },
+      { dataset: "notes", table: "notes", runColumn: "last_synced_run_id" },
+      { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id" }
+    ];
+    missingDatasets = (db) => coverage(db).filter((c) => !c.present).map((c) => c.dataset);
   }
 });
 
@@ -6632,7 +6654,10 @@ ${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
             handle: config?.handle ?? null,
             db: dbFile,
             last_sync: last ?? null,
-            last_background_sync: readLastSyncLog()
+            last_background_sync: readLastSyncLog(),
+            // Qué hay y qué falta: el skill lo mira para lanzar un sync sin que se lo pidan.
+            coverage: coverage(db),
+            missing: missingDatasets(db)
           },
           null,
           1

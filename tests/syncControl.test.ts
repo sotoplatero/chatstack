@@ -6,7 +6,7 @@ import { openDb, type Db } from "../src/db/index.js";
 import { acquireLock, releaseLock, lockPath, isFresh, hoursSinceLastSync, writeSyncLog, readLastSyncLog, LOCK_TTL_MS } from "../src/syncControl.js";
 import { collectNotes, fetchOwnNotes, type NoteCounts } from "../src/ingest/notes.js";
 import { SubstackClient } from "../src/ingest/substack.js";
-import { knownNotes } from "../src/queries.js";
+import { coverage, knownNotes, missingDatasets } from "../src/queries.js";
 import { loadNotes } from "../src/load/notes.js";
 import { startRun, finishRun } from "../src/db/index.js";
 
@@ -212,5 +212,44 @@ describe("knownNotes lee de la BD lo que el incremental necesita", () => {
     expect(k.counts.get(10)).toEqual({ reaction_count: 2, restacks: 1, children_count: 3 });
     expect(k.withStats.has(10)).toBe(true);
     expect(k.withStats.has(11)).toBe(false);
+  });
+});
+
+describe("cobertura: qué hay y qué falta", () => {
+  it("una base recién creada lo declara todo ausente", () => {
+    const db = openDb(":memory:");
+    const cob = coverage(db);
+    expect(cob.every((c) => !c.present && c.rows === 0)).toBe(true);
+    // Es lo que permite al skill lanzar un sync sin que nadie se lo pida.
+    expect(missingDatasets(db)).toContain("notes");
+    expect(missingDatasets(db)).toContain("subscribers");
+  });
+
+  it("marca presente solo lo que tiene filas, y de qué sync viene", () => {
+    const db = openDb(":memory:");
+    const runId = startRun(db, null);
+    loadNotes(db, runId, {
+      kind: "notes",
+      fetched_at: new Date().toISOString(),
+      user_id: 1,
+      errors: [],
+      notes: [
+        {
+          id: 10, user_id: 1, date: "2026-09-01", body: "a",
+          reaction_count: 1, restacks: 0, children_count: 0, attachments: [],
+          reactors: [{ id: 7, name: "Ana", handle: null, photo_url: null, publication_subdomain: null, publication_name: null, is_subscribed: null, is_following: null, bestseller_tier: null }],
+          restackers: [], replies: [], stats: null,
+        },
+      ],
+    });
+    finishRun(db, runId, "ok");
+
+    const por = Object.fromEntries(coverage(db).map((c) => [c.dataset, c]));
+    expect(por.notes).toMatchObject({ present: true, rows: 1, last_run_id: runId });
+    expect(por.note_interactions).toMatchObject({ present: true, rows: 1 });
+    // Los suscriptores siguen sin llegar: eso es exactamente lo que hay que poder detectar.
+    expect(por.subscribers.present).toBe(false);
+    expect(missingDatasets(db)).toContain("subscribers");
+    expect(missingDatasets(db)).not.toContain("notes");
   });
 });

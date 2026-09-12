@@ -83,11 +83,7 @@ debería ofrecerse a conectar tu Substack.
 Abre Claude Code y pídele *«conecta mi Substack»*. El skill se encarga; hay dos caminos y elige
 el que tengas disponible.
 
-**Con la extensión Claude in Chrome** — no tocas nada: Claude abre tu panel, lanza las consultas
-desde la propia página (tu navegador ya está autenticado) y carga los resultados. Tu cookie no se
-copia a ningún archivo.
-
-**Sin ella** — le das tu sesión una vez:
+Te va a pedir tu sesión **una sola vez**:
 
 1. En Chrome, abre `https://<tu-subdominio>.substack.com/publish/home`, ya logueado.
 2. `F12` → pestaña **Network** → recarga con `Ctrl+R`.
@@ -96,6 +92,13 @@ copia a ningún archivo.
 
 Por debajo eso es `stackchat connect --cookies <archivo>`, que verifica la sesión y detecta tu
 publicación antes de guardar nada. **Borra ese archivo al terminar: contiene tu sesión.**
+
+Son cuatro pasos que haces una vez en la vida. A partir de ahí Claude detecta por su cuenta lo que
+falte o esté viejo, lanza el sync por detrás y te responde mientras, con los datos que ya tiene.
+
+Hay una vía alternativa con la extensión Claude in Chrome, sin tocar DevTools, pero exige que
+estés encima en cada sincronización y abre ventanas de descarga. Está documentada en el skill para
+quien la prefiera.
 
 Después, `stackchat sync` descarga todo (3-4 minutos la primera vez; Substack limita el ritmo al
 recorrer las Notes).
