@@ -91,10 +91,13 @@ describe("connect", () => {
 
 describe("paths", () => {
   it("STACKCHAT_HOME manda, y `:memory:` no se convierte en ruta", () => {
-    process.env.STACKCHAT_HOME = "C:/tmp/x";
-    expect(stackchatHome().replace(/\\/g, "/")).toBe("C:/tmp/x");
+    // Ruta absoluta del sistema en curso: una fija de Windows no lo es en Linux, y `resolve`
+    // le antepondría el cwd. Lo cazó CI antes que yo.
+    const raiz = join(tmpdir(), "stackchat-paths-x");
+    process.env.STACKCHAT_HOME = raiz;
+    expect(stackchatHome()).toBe(raiz);
     expect(dbPath(":memory:")).toBe(":memory:");
-    expect(dbPath().replace(/\\/g, "/")).toBe("C:/tmp/x/stackchat.db");
+    expect(dbPath()).toBe(join(raiz, "stackchat.db"));
     delete process.env.STACKCHAT_HOME;
   });
 });
