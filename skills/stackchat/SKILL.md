@@ -18,6 +18,18 @@ description: >-
 Tus datos de Substack en una base SQLite local que puedes preguntar en lenguaje natural.
 Todo se queda en la máquina del usuario: no hay servidor, no se envía nada a ningún sitio.
 
+## Dos reglas, antes que nada
+
+**1. Ejecuta `$CS status` antes de decir una sola palabra sobre el estado.** Nunca afirmes que el
+usuario no está conectado, que no hay datos, o que falta algo, sin haberlo comprobado en esta
+sesión. Es el error número uno: suena razonable, y es falso — mucha gente ya tiene su sesión
+guardada de antes.
+
+**2. Actúa, no pidas permiso.** Consultar la base y lanzar un sync son acciones locales y de solo
+lectura: hazlas y cuenta el resultado. Nada de «¿quieres que lo conecte?» o «¿procedo?». La única
+vez que se pregunta algo es cuando necesitas el archivo cURL, que solo el usuario puede darte — y
+entonces se pide directamente, no se ofrece.
+
 ## El comando
 
 El binario está junto a este archivo. Defínelo una vez por sesión con la ruta absoluta del
@@ -47,7 +59,7 @@ Y decides con esta tabla, **sin preguntarle nada al usuario**:
 
 | `status` dice | Qué haces |
 |---|---|
-| `connected: false` | Conectar (abajo). Es lo único que requiere al usuario. |
+| `connected: false` | Pedir el cURL (abajo). Es lo único que requiere al usuario. |
 | Falta lo que la pregunta necesita | `$CS sync --background` y **responde igual**, con lo que haya |
 | Todo presente pero `last_sync` de hace >6 h | `$CS sync --if-stale 6 --background` y responde sin esperar |
 | Todo presente y fresco | Responde y ya |
@@ -74,9 +86,9 @@ Se puede hablar de los artículos mientras las notas se descargan: son conjuntos
 
 ## Conectar
 
-**Pide el cURL. Es la vía normal**, aunque tengas Chrome disponible: son cuatro pasos una sola vez
-en la vida, y a partir de ahí todo se sincroniza solo en segundo plano, en ~13 segundos y sin
-gastar contexto.
+Solo si `status` dice `connected: false`. **Pide el cURL directamente**, no lo ofrezcas como una
+opción entre varias: son cuatro pasos una sola vez en la vida, y a partir de ahí todo se sincroniza
+solo en segundo plano, en ~13 segundos y sin gastar contexto. Dilo así, y enumera los pasos.
 
 1. Que abra en Chrome `https://<su-subdominio>.substack.com/publish/home`, ya logueado.
 2. `F12` → pestaña **Network** → recargar con `Ctrl+R`.
