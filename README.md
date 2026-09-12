@@ -40,7 +40,21 @@ para dejarlo solo en el proyecto actual.
 nada que compilar ni ningún `npm install`.
 
 <details>
-<summary>Instalar a mano, sin el CLI de skills</summary>
+<summary>Instalar a mano: descargar el .zip</summary>
+
+Descarga **[stackchat-skill.zip](https://github.com/sotoplatero/stackchat/releases/latest/download/stackchat-skill.zip)**
+(se regenera en cada cambio) y deja la carpeta `stackchat/` que trae dentro donde tu agente busca
+los skills — normalmente `~/.claude/skills/`.
+
+En **Claude Desktop** el .zip es la única vía: *Customize → Skills → + → Upload a skill*. Requiere
+tener activada la ejecución de código (*Settings → Capabilities*). Ten en cuenta que los skills
+subidos se sincronizan a todos tus dispositivos, también a aquellos donde no tengas la base de
+datos; y que el agente solo alcanza `~/.stackchat` si adjuntas esa carpeta a la sesión.
+
+</details>
+
+<details>
+<summary>Instalar a mano: clonar el repo</summary>
 
 La carpeta `skills/stackchat` es autocontenida (SKILL.md + el binario + los snippets), así que
 basta con dejarla donde tu agente busca los skills:

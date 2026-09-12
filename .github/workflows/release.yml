@@ -1,0 +1,46 @@
+name: build
+
+# El .zip del skill se publica como asset de la release `latest`, no se commitea:
+# así nunca queda desfasado respecto a main, que es el riesgo de un binario versionado.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # node:sqlite exige 22.13+; con menos, el bundle no arranca.
+          node-version: "22.13"
+          cache: npm
+
+      - run: npm ci
+
+      # Reconstruye el bundle y los snippets desde el fuente: si alguien commiteó un
+      # bundle a mano y no coincide, los tests que lo ejecutan lo delatan.
+      - run: npm run build
+
+      - run: npm test
+
+      - name: Empaquetar el skill
+        run: npm run zip
+
+      - name: Publicar el zip en la release `latest`
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || gh release create latest \
+            --title "Última versión del skill" \
+            --notes "Descarga \`stackchat-skill.zip\` e instálalo a mano, o usa \`npx skills add sotoplatero/stackchat\`. Este asset se regenera en cada push a main." \
+            --latest
+          gh release upload latest stackchat-skill.zip --clobber
