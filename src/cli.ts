@@ -6,8 +6,9 @@ import { loadDirectory, type RunReport } from "./load/index.js";
 import { ingestSubstack } from "./ingest/substack.js";
 import { cookieFromCurl, loadAuth } from "./ingest/auth.js";
 import { helpText, parseFlags, runQuery, UsageError } from "./queryCommand.js";
-import { querySql } from "./queries.js";
+import { knownNotes, querySql } from "./queries.js";
 import { connect } from "./connect.js";
+import { acquireLock, isFresh, readLastSyncLog, relaunchDetached, releaseLock, writeSyncLog } from "./syncControl.js";
 import { authPath, chatstackHome, dbPath as resolveDbPath, loadConfig, rawDir, resolveSubdomain } from "./paths.js";
 
 const HELP = `chatstack — tus datos de Substack en una base local que puedes consultar
@@ -19,8 +20,13 @@ Uso:
                   recargar → clic derecho en la primera petición → Copy as cURL (bash).
   chatstack status
                   Dice si hay sesión, a qué publicación apunta y cuándo fue el último sync.
-  chatstack sync  [--sub <subdominio>]
-                  Descarga tus datos de Substack y los carga en la base.
+  chatstack sync  [--full] [--if-stale <horas>] [--background] [--sub <subdominio>]
+                  Descarga tus datos de Substack y los carga en la base. Por defecto es
+                  incremental: solo pide las interacciones de las notas cuyos contadores
+                  han cambiado, y acorta el rango de las series (~10 s sin novedades,
+                  frente a 3-4 min de un sync completo). --full lo fuerza todo.
+                  --if-stale N no hace nada si el último sync es más reciente que N horas.
+                  --background se desasocia y devuelve al instante (para hooks).
   chatstack load  <carpeta>
                   Carga CSV/ZIP/notes.json ya descargados (lo usa la vía del navegador).
   chatstack q <consulta> [--flags]
@@ -71,6 +77,9 @@ async function main() {
       db: { type: "string" },
       sub: { type: "string" },
       cookies: { type: "string" },
+      full: { type: "boolean" },
+      background: { type: "boolean" },
+      "if-stale": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -126,6 +135,7 @@ async function main() {
             handle: config?.handle ?? null,
             db: dbFile,
             last_sync: last ?? null,
+            last_background_sync: readLastSyncLog(),
           },
           null,
           1,
@@ -155,19 +165,40 @@ async function main() {
         log("No hay sesión guardada. Ejecuta primero:\n  chatstack connect --cookies <archivo.curl>");
         process.exit(2);
       }
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const dir = join(rawDir(), stamp);
-      const ingest = await ingestSubstack({ subdomain: sub, rawDir: dir, cookie: auth.cookie, log });
-      if (ingest.sessionExpired) {
-        log("La sesión de Substack ha caducado. Repite `chatstack connect` con un cURL nuevo.");
+      const db = openDb(dbFile);
+
+      // Guardia de frescura: es lo que hace tolerable un hook en cada sesión.
+      if (values["if-stale"] !== undefined) {
+        const horas = Number(values["if-stale"]);
+        if (!Number.isFinite(horas) || horas < 0) {
+          log("--if-stale espera un número de horas, p. ej. --if-stale 6");
+          process.exit(2);
+        }
+        if (isFresh(db, horas)) {
+          log(`Los datos tienen menos de ${horas} h; no hay nada que hacer.`);
+          return;
+        }
       }
-      if (ingest.failed.length) log(`Fallaron: ${ingest.failed.map((f) => `${f.kind} (${f.error})`).join("; ")}`);
-      if (!ingest.downloaded.length) {
-        log("No se descargó nada; no hay nada que cargar.");
-        process.exit(2);
+
+      // Desasociarse ANTES de trabajar: SessionStart bloquea la sesión hasta que el comando acaba.
+      if (values.background) {
+        const args = [process.argv[1], ...process.argv.slice(2).filter((a) => a !== "--background")];
+        log(`sync lanzado en segundo plano (pid ${relaunchDetached(args)})`);
+        return;
       }
-      printReport(loadDirectory(openDb(dbFile), dir), log);
-      if (ingest.failed.length) process.exit(3);
+
+      // Un candado: con un hook global, tres sesiones abiertas lanzarían tres syncs simultáneos
+      // contra una API que ya nos limita con 429.
+      if (!acquireLock()) {
+        log("Ya hay un sync en marcha; no lanzo otro.");
+        return;
+      }
+      try {
+        const code = await runSync({ sub, cookie: auth.cookie, db, full: !!values.full, log });
+        if (code) process.exit(code);
+      } finally {
+        releaseLock();
+      }
       return;
     }
     default:
@@ -175,6 +206,47 @@ async function main() {
       process.stdout.write(HELP);
       process.exit(2);
   }
+}
+
+/**
+ * Descarga y carga. Devuelve el código de salida (0 = bien, 3 = algo falló pero se cargó el resto),
+ * en vez de llamar a process.exit, para que quien la use pueda soltar el candado primero.
+ */
+async function runSync(o: {
+  sub: string;
+  cookie: string;
+  db: ReturnType<typeof openDb>;
+  full: boolean;
+  log: (m: string) => void;
+}): Promise<number> {
+  const dir = join(rawDir(), new Date().toISOString().replace(/[:.]/g, "-"));
+  const ingest = await ingestSubstack({
+    subdomain: o.sub,
+    rawDir: dir,
+    cookie: o.cookie,
+    log: o.log,
+    // Sin `knownNotes` el sync es completo; con él, solo pide lo que cambió.
+    knownNotes: o.full ? undefined : knownNotes(o.db),
+    // Las series viejas ya están en la BD y no cambian: en incremental, solo los últimos 120 días.
+    seriesFrom: o.full ? undefined : new Date(Date.now() - 120 * 86_400_000).toISOString().slice(0, 10),
+  });
+  if (ingest.sessionExpired) {
+    o.log("La sesión de Substack ha caducado. Repite `chatstack connect` con un cURL nuevo.");
+    writeSyncLog("falló: la sesión de Substack ha caducado");
+    return 2;
+  }
+  if (ingest.failed.length) o.log(`Fallaron: ${ingest.failed.map((f) => `${f.kind} (${f.error})`).join("; ")}`);
+  if (!ingest.downloaded.length) {
+    o.log("No se descargó nada; no hay nada que cargar.");
+    writeSyncLog("falló: no se descargó nada");
+    return 2;
+  }
+  const rep = loadDirectory(o.db, dir);
+  printReport(rep, o.log);
+  writeSyncLog(
+    `sync #${rep.runId} ${rep.status}${ingest.failed.length ? ` (${ingest.failed.length} fuentes fallaron)` : ""}`,
+  );
+  return ingest.failed.length ? 3 : 0;
 }
 
 function printReport(rep: RunReport, log: (m: string) => void) {

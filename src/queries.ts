@@ -363,3 +363,25 @@ function safeJson(v: unknown) {
     return v;
   }
 }
+
+/**
+ * Contadores de las notas ya guardadas, para el sync incremental. Se lee de la BD y se compara
+ * con lo que el feed devuelve gratis, así no hace falta pedir interacciones de lo que no cambió.
+ */
+export function knownNotes(db: Db): { counts: Map<number, { reaction_count: number; restacks: number; children_count: number }>; withStats: Set<number> } {
+  const rows = db
+    .prepare("SELECT note_id, reaction_count, restacks, replies_count, stats IS NOT NULL AS has_stats FROM notes")
+    .all() as { note_id: number; reaction_count: number; restacks: number; replies_count: number; has_stats: number }[];
+  const counts = new Map<number, { reaction_count: number; restacks: number; children_count: number }>();
+  const withStats = new Set<number>();
+  for (const r of rows) {
+    counts.set(r.note_id, {
+      reaction_count: r.reaction_count,
+      restacks: r.restacks,
+      // En la BD se llama replies_count; en el feed, children_count.
+      children_count: r.replies_count,
+    });
+    if (r.has_stats) withStats.add(r.note_id);
+  }
+  return { counts, withStats };
+}

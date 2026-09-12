@@ -77,19 +77,62 @@ export async function fetchSelfUserId(client: SubstackClient): Promise<number> {
   return me.id;
 }
 
-/** Todas las notas propias del feed del perfil (se descartan posts y restacks de terceros). */
-export async function fetchOwnNotes(client: SubstackClient, userId: number, maxPages = 200): Promise<RawUser[]> {
+/** Contadores que el feed ya trae de cada nota, sin coste: la clave del sync incremental. */
+export interface NoteCounts {
+  reaction_count: number;
+  restacks: number;
+  children_count: number;
+}
+
+export const countsOf = (c: RawUser): NoteCounts => ({
+  reaction_count: Number(c.reaction_count ?? 0),
+  restacks: Number(c.restacks ?? 0),
+  children_count: Number(c.children_count ?? 0),
+});
+
+const sameCounts = (a: NoteCounts, b: NoteCounts) =>
+  a.reaction_count === b.reaction_count && a.restacks === b.restacks && a.children_count === b.children_count;
+
+export interface FetchNotesOptions {
+  maxPages?: number;
+  /** Contadores por nota tal y como están en la BD. Habilita el corte anticipado. */
+  known?: Map<number, NoteCounts>;
+  /** Páginas seguidas sin novedad tras las que se deja de paginar. */
+  stopAfterUnchangedPages?: number;
+}
+
+/**
+ * Notas propias del feed del perfil (se descartan posts y restacks de terceros).
+ *
+ * Con `known`, para de paginar cuando varias páginas seguidas solo traen notas ya conocidas con
+ * los mismos contadores: el feed viene por fecha, así que más atrás solo hay notas viejas.
+ */
+export async function fetchOwnNotes(
+  client: SubstackClient,
+  userId: number,
+  opts: FetchNotesOptions = {},
+): Promise<RawUser[]> {
+  const { maxPages = 200, known, stopAfterUnchangedPages = 3 } = opts;
   const out: RawUser[] = [];
   let cursor = "";
+  let quietPages = 0;
   for (let page = 0; page < maxPages; page++) {
     const payload = (await (await client.get(ROOT + SOCIAL.profileFeed(userId, cursor), "application/json")).json()) as {
       items?: RawUser[];
       nextCursor?: string;
     };
     const items = payload.items ?? [];
+    let novedad = false;
     for (const it of items) {
       const c = it.comment;
-      if (it.type === "comment" && c && Number(c.user_id) === userId) out.push(c);
+      if (it.type !== "comment" || !c || Number(c.user_id) !== userId) continue;
+      out.push(c);
+      const prev = known?.get(Number(c.id));
+      if (!prev || !sameCounts(prev, countsOf(c))) novedad = true;
+    }
+    if (known) {
+      quietPages = novedad ? 0 : quietPages + 1;
+      if (quietPages >= stopAfterUnchangedPages) break;
     }
     const next = payload.nextCursor ?? "";
     if (!next || !items.length || next === cursor) break;
@@ -138,17 +181,42 @@ async function fetchNoteStats(client: SubstackClient, noteId: number): Promise<u
   }
 }
 
-export async function collectNotes(
-  client: SubstackClient,
-  opts: { userId?: number; concurrency?: number; log?: (m: string) => void } = {},
-): Promise<NotesBundle> {
+export interface CollectNotesOptions {
+  userId?: number;
+  concurrency?: number;
+  log?: (m: string) => void;
+  /**
+   * Contadores ya guardados. Las notas que no han cambiado se omiten del bundle: no se piden sus
+   * interacciones y el loader no las toca, así que lo que hay en la BD sigue siendo válido.
+   */
+  known?: Map<number, NoteCounts>;
+  /** Notas cuyo `stats` ya está guardado: no se vuelve a pedir salvo que la nota haya cambiado. */
+  withStats?: Set<number>;
+}
+
+export async function collectNotes(client: SubstackClient, opts: CollectNotesOptions = {}): Promise<NotesBundle> {
   const log = opts.log ?? (() => {});
   const userId = opts.userId ?? (await fetchSelfUserId(client));
-  const raw = await fetchOwnNotes(client, userId);
-  log(`  ${raw.length} notas propias en el feed`);
+  const raw = await fetchOwnNotes(client, userId, { known: opts.known });
   const bundle: NotesBundle = { kind: "notes", fetched_at: new Date().toISOString(), user_id: userId, notes: [], errors: [] };
 
-  const queue = [...raw];
+  const pendientes = opts.known
+    ? raw.filter((c) => {
+        const prev = opts.known!.get(Number(c.id));
+        if (!prev) return true;
+        const now = countsOf(c);
+        if (!sameCounts(prev, now)) return true;
+        // Sin cambios, pero aún sin stats y con interacción: merece un intento más.
+        return !opts.withStats?.has(Number(c.id)) && now.reaction_count + now.restacks + now.children_count > 0;
+      })
+    : raw;
+  log(
+    opts.known
+      ? `  ${raw.length} notas en el feed, ${pendientes.length} con novedades`
+      : `  ${raw.length} notas propias en el feed`,
+  );
+
+  const queue = [...pendientes];
   const worker = async () => {
     for (let c = queue.shift(); c; c = queue.shift()) {
       const id = Number(c.id);

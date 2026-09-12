@@ -2020,8 +2020,8 @@ var require_adm_zip = __commonJS({
         return null;
       }
       function fixPath(zipPath) {
-        const { join: join5, normalize, sep } = pth.posix;
-        return join5(pth.isAbsolute(zipPath) ? "/" : ".", normalize(sep + zipPath.split("\\").join(sep) + sep));
+        const { join: join6, normalize, sep } = pth.posix;
+        return join6(pth.isAbsolute(zipPath) ? "/" : ".", normalize(sep + zipPath.split("\\").join(sep) + sep));
       }
       function filenameFilter(filterfn) {
         if (filterfn instanceof RegExp) {
@@ -3027,6 +3027,21 @@ function safeJson(v) {
     return v;
   }
 }
+function knownNotes(db) {
+  const rows = db.prepare("SELECT note_id, reaction_count, restacks, replies_count, stats IS NOT NULL AS has_stats FROM notes").all();
+  const counts = /* @__PURE__ */ new Map();
+  const withStats = /* @__PURE__ */ new Set();
+  for (const r of rows) {
+    counts.set(r.note_id, {
+      reaction_count: r.reaction_count,
+      restacks: r.restacks,
+      // En la BD se llama replies_count; en el feed, children_count.
+      children_count: r.replies_count
+    });
+    if (r.has_stats) withStats.add(r.note_id);
+  }
+  return { counts, withStats };
+}
 var FORBIDDEN;
 var init_queries = __esm({
   "src/queries.ts"() {
@@ -3204,8 +3219,8 @@ var init_server = __esm({
 
 // src/cli.ts
 var import_node_util = require("node:util");
-var import_node_path6 = require("node:path");
-var import_node_fs7 = require("node:fs");
+var import_node_path7 = require("node:path");
+var import_node_fs8 = require("node:fs");
 
 // src/db/index.ts
 var import_node_sqlite = require("node:sqlite");
@@ -5827,15 +5842,31 @@ async function fetchSelfUserId(client) {
   if (!me?.id) throw new Error("no pude obtener el id de usuario (user/profile/self)");
   return me.id;
 }
-async function fetchOwnNotes(client, userId, maxPages = 200) {
+var countsOf = (c) => ({
+  reaction_count: Number(c.reaction_count ?? 0),
+  restacks: Number(c.restacks ?? 0),
+  children_count: Number(c.children_count ?? 0)
+});
+var sameCounts = (a, b) => a.reaction_count === b.reaction_count && a.restacks === b.restacks && a.children_count === b.children_count;
+async function fetchOwnNotes(client, userId, opts = {}) {
+  const { maxPages = 200, known, stopAfterUnchangedPages = 3 } = opts;
   const out = [];
   let cursor = "";
+  let quietPages = 0;
   for (let page = 0; page < maxPages; page++) {
     const payload = await (await client.get(ROOT + SOCIAL.profileFeed(userId, cursor), "application/json")).json();
     const items = payload.items ?? [];
+    let novedad = false;
     for (const it of items) {
       const c = it.comment;
-      if (it.type === "comment" && c && Number(c.user_id) === userId) out.push(c);
+      if (it.type !== "comment" || !c || Number(c.user_id) !== userId) continue;
+      out.push(c);
+      const prev = known?.get(Number(c.id));
+      if (!prev || !sameCounts(prev, countsOf(c))) novedad = true;
+    }
+    if (known) {
+      quietPages = novedad ? 0 : quietPages + 1;
+      if (quietPages >= stopAfterUnchangedPages) break;
     }
     const next = payload.nextCursor ?? "";
     if (!next || !items.length || next === cursor) break;
@@ -5881,10 +5912,19 @@ async function collectNotes(client, opts = {}) {
   const log = opts.log ?? (() => {
   });
   const userId = opts.userId ?? await fetchSelfUserId(client);
-  const raw = await fetchOwnNotes(client, userId);
-  log(`  ${raw.length} notas propias en el feed`);
+  const raw = await fetchOwnNotes(client, userId, { known: opts.known });
   const bundle = { kind: "notes", fetched_at: (/* @__PURE__ */ new Date()).toISOString(), user_id: userId, notes: [], errors: [] };
-  const queue = [...raw];
+  const pendientes = opts.known ? raw.filter((c) => {
+    const prev = opts.known.get(Number(c.id));
+    if (!prev) return true;
+    const now = countsOf(c);
+    if (!sameCounts(prev, now)) return true;
+    return !opts.withStats?.has(Number(c.id)) && now.reaction_count + now.restacks + now.children_count > 0;
+  }) : raw;
+  log(
+    opts.known ? `  ${raw.length} notas en el feed, ${pendientes.length} con novedades` : `  ${raw.length} notas propias en el feed`
+  );
+  const queue = [...pendientes];
   const worker = async () => {
     for (let c = queue.shift(); c; c = queue.shift()) {
       const id = Number(c.id);
@@ -6091,20 +6131,25 @@ async function ingestSubstack(opts) {
   });
   (0, import_node_fs4.mkdirSync)(opts.rawDir, { recursive: true });
   const client = new SubstackClient(opts.subdomain, opts.cookie, log, opts.fetchImpl, opts.delays);
+  const desde = opts.seriesFrom ?? DEFAULT_FROM;
   const report = { rawDir: opts.rawDir, downloaded: [], failed: [], sessionExpired: false };
   const steps = [
     { kind: "email_list", file: "email_list.csv", run: () => client.subscriberExport() },
     { kind: "posts", file: "posts.csv", run: () => client.postsCsv() },
     { kind: "email_stats", file: "email_stats.csv", run: () => client.emailStats() },
-    { kind: "growth_sources", file: "growth_sources.csv", run: () => client.growthSources() },
-    { kind: "traffic", file: "traffic.csv", run: () => client.traffic() },
-    { kind: "paid_subscriber_growth", file: "paid_subscriber_growth.csv", run: () => client.paidSubscriberGrowth() },
-    { kind: "subscriber_totals", file: "subscriber_totals.csv", run: () => client.subscriberTotals() },
+    { kind: "growth_sources", file: "growth_sources.csv", run: () => client.growthSources(desde) },
+    { kind: "traffic", file: "traffic.csv", run: () => client.traffic(desde) },
+    { kind: "paid_subscriber_growth", file: "paid_subscriber_growth.csv", run: () => client.paidSubscriberGrowth(desde) },
+    { kind: "subscriber_totals", file: "subscriber_totals.csv", run: () => client.subscriberTotals(desde) },
     {
       kind: "notes",
       file: "notes.json",
       run: async () => {
-        const bundle = await collectNotes(client, { log });
+        const bundle = await collectNotes(client, {
+          log,
+          known: opts.knownNotes?.counts,
+          withStats: opts.knownNotes?.withStats
+        });
         if (bundle.errors.length) log(`  ${bundle.errors.length} peticiones de notas fallaron (se conserva el resto)`);
         return JSON.stringify(bundle);
       }
@@ -6112,8 +6157,10 @@ async function ingestSubstack(opts) {
   ];
   for (const step of steps) {
     try {
+      const t0 = Date.now();
       log(`\u2192 ${step.kind}`);
       const text = await step.run();
+      log(`  ${step.kind}: ${((Date.now() - t0) / 1e3).toFixed(1)}s`);
       if (!step.file.endsWith(".json") && text.trim().split(/\r?\n/).length < 2) throw new Error("respuesta vac\xEDa");
       const path = (0, import_node_path3.join)(opts.rawDir, step.file);
       (0, import_node_fs4.writeFileSync)(path, text, "utf8");
@@ -6404,6 +6451,77 @@ async function connect(cookie, opts = {}) {
   return { identity, config, needsChoice: [] };
 }
 
+// src/syncControl.ts
+var import_node_fs7 = require("node:fs");
+var import_node_path6 = require("node:path");
+var import_node_child_process = require("node:child_process");
+var lockPath = () => (0, import_node_path6.join)(chatstackHome(), "sync.lock");
+var logPath = () => (0, import_node_path6.join)(chatstackHome(), "last-sync.log");
+var LOCK_TTL_MS = 15 * 60 * 1e3;
+function hoursSinceLastSync(db, now = Date.now()) {
+  const row = db.prepare("SELECT finished_at FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").get();
+  if (!row?.finished_at) return null;
+  const t = Date.parse(row.finished_at);
+  return Number.isFinite(t) ? (now - t) / 36e5 : null;
+}
+function isFresh(db, maxAgeHours, now = Date.now()) {
+  const h = hoursSinceLastSync(db, now);
+  return h !== null && h < maxAgeHours;
+}
+function acquireLock(now = Date.now(), pid = process.pid) {
+  ensureHome();
+  const p = lockPath();
+  if ((0, import_node_fs7.existsSync)(p)) {
+    try {
+      const held = JSON.parse((0, import_node_fs7.readFileSync)(p, "utf8"));
+      const age = now - Date.parse(held.started_at);
+      if (Number.isFinite(age) && age < LOCK_TTL_MS && held.pid !== pid && isAlive(held.pid)) return false;
+    } catch {
+    }
+  }
+  (0, import_node_fs7.writeFileSync)(p, JSON.stringify({ pid, started_at: new Date(now).toISOString() }), "utf8");
+  return true;
+}
+function releaseLock() {
+  try {
+    (0, import_node_fs7.unlinkSync)(lockPath());
+  } catch {
+  }
+}
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function writeSyncLog(line) {
+  ensureHome();
+  try {
+    (0, import_node_fs7.appendFileSync)(logPath(), `${(/* @__PURE__ */ new Date()).toISOString()} ${line}
+`, "utf8");
+  } catch {
+  }
+}
+function readLastSyncLog() {
+  try {
+    const lines = (0, import_node_fs7.readFileSync)(logPath(), "utf8").trim().split(/\r?\n/).filter(Boolean);
+    return lines.length ? lines[lines.length - 1] : null;
+  } catch {
+    return null;
+  }
+}
+function relaunchDetached(argv, execPath = process.execPath) {
+  const child = (0, import_node_child_process.spawn)(execPath, argv, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.unref();
+  return child.pid;
+}
+
 // src/cli.ts
 var HELP = `chatstack \u2014 tus datos de Substack en una base local que puedes consultar
 
@@ -6414,8 +6532,13 @@ Uso:
                   recargar \u2192 clic derecho en la primera petici\xF3n \u2192 Copy as cURL (bash).
   chatstack status
                   Dice si hay sesi\xF3n, a qu\xE9 publicaci\xF3n apunta y cu\xE1ndo fue el \xFAltimo sync.
-  chatstack sync  [--sub <subdominio>]
-                  Descarga tus datos de Substack y los carga en la base.
+  chatstack sync  [--full] [--if-stale <horas>] [--background] [--sub <subdominio>]
+                  Descarga tus datos de Substack y los carga en la base. Por defecto es
+                  incremental: solo pide las interacciones de las notas cuyos contadores
+                  han cambiado, y acorta el rango de las series (~10 s sin novedades,
+                  frente a 3-4 min de un sync completo). --full lo fuerza todo.
+                  --if-stale N no hace nada si el \xFAltimo sync es m\xE1s reciente que N horas.
+                  --background se desasocia y devuelve al instante (para hooks).
   chatstack load  <carpeta>
                   Carga CSV/ZIP/notes.json ya descargados (lo usa la v\xEDa del navegador).
   chatstack q <consulta> [--flags]
@@ -6459,6 +6582,9 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
       db: { type: "string" },
       sub: { type: "string" },
       cookies: { type: "string" },
+      full: { type: "boolean" },
+      background: { type: "boolean" },
+      "if-stale": { type: "string" },
       help: { type: "boolean", short: "h" }
     }
   });
@@ -6475,8 +6601,8 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
         );
         process.exit(2);
       }
-      const curlFile = (0, import_node_path6.resolve)(values.cookies);
-      const r = await connect(cookieFromCurl((0, import_node_fs7.readFileSync)(curlFile, "utf8")), { subdomain: values.sub });
+      const curlFile = (0, import_node_path7.resolve)(values.cookies);
+      const r = await connect(cookieFromCurl((0, import_node_fs8.readFileSync)(curlFile, "utf8")), { subdomain: values.sub });
       if (!r.config) {
         log(
           "Administras varias publicaciones. Repite eligiendo una con --sub:\n" + r.needsChoice.map((p) => `  --sub ${p.subdomain}${p.name ? `   (${p.name})` : ""}`).join("\n")
@@ -6505,7 +6631,8 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
             publication_name: config?.publication_name ?? null,
             handle: config?.handle ?? null,
             db: dbFile,
-            last_sync: last ?? null
+            last_sync: last ?? null,
+            last_background_sync: readLastSyncLog()
           },
           null,
           1
@@ -6524,7 +6651,7 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
         log("Falta la carpeta: chatstack load <carpeta>");
         process.exit(2);
       }
-      printReport(loadDirectory(openDb(dbFile), (0, import_node_path6.resolve)(dir)), log);
+      printReport(loadDirectory(openDb(dbFile), (0, import_node_path7.resolve)(dir)), log);
       return;
     }
     case "sync": {
@@ -6534,19 +6661,33 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
         log("No hay sesi\xF3n guardada. Ejecuta primero:\n  chatstack connect --cookies <archivo.curl>");
         process.exit(2);
       }
-      const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      const dir = (0, import_node_path6.join)(rawDir(), stamp);
-      const ingest = await ingestSubstack({ subdomain: sub, rawDir: dir, cookie: auth.cookie, log });
-      if (ingest.sessionExpired) {
-        log("La sesi\xF3n de Substack ha caducado. Repite `chatstack connect` con un cURL nuevo.");
+      const db = openDb(dbFile);
+      if (values["if-stale"] !== void 0) {
+        const horas = Number(values["if-stale"]);
+        if (!Number.isFinite(horas) || horas < 0) {
+          log("--if-stale espera un n\xFAmero de horas, p. ej. --if-stale 6");
+          process.exit(2);
+        }
+        if (isFresh(db, horas)) {
+          log(`Los datos tienen menos de ${horas} h; no hay nada que hacer.`);
+          return;
+        }
       }
-      if (ingest.failed.length) log(`Fallaron: ${ingest.failed.map((f) => `${f.kind} (${f.error})`).join("; ")}`);
-      if (!ingest.downloaded.length) {
-        log("No se descarg\xF3 nada; no hay nada que cargar.");
-        process.exit(2);
+      if (values.background) {
+        const args = [process.argv[1], ...process.argv.slice(2).filter((a) => a !== "--background")];
+        log(`sync lanzado en segundo plano (pid ${relaunchDetached(args)})`);
+        return;
       }
-      printReport(loadDirectory(openDb(dbFile), dir), log);
-      if (ingest.failed.length) process.exit(3);
+      if (!acquireLock()) {
+        log("Ya hay un sync en marcha; no lanzo otro.");
+        return;
+      }
+      try {
+        const code = await runSync({ sub, cookie: auth.cookie, db, full: !!values.full, log });
+        if (code) process.exit(code);
+      } finally {
+        releaseLock();
+      }
       return;
     }
     default:
@@ -6555,6 +6696,36 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
       process.stdout.write(HELP);
       process.exit(2);
   }
+}
+async function runSync(o) {
+  const dir = (0, import_node_path7.join)(rawDir(), (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-"));
+  const ingest = await ingestSubstack({
+    subdomain: o.sub,
+    rawDir: dir,
+    cookie: o.cookie,
+    log: o.log,
+    // Sin `knownNotes` el sync es completo; con él, solo pide lo que cambió.
+    knownNotes: o.full ? void 0 : knownNotes(o.db),
+    // Las series viejas ya están en la BD y no cambian: en incremental, solo los últimos 120 días.
+    seriesFrom: o.full ? void 0 : new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10)
+  });
+  if (ingest.sessionExpired) {
+    o.log("La sesi\xF3n de Substack ha caducado. Repite `chatstack connect` con un cURL nuevo.");
+    writeSyncLog("fall\xF3: la sesi\xF3n de Substack ha caducado");
+    return 2;
+  }
+  if (ingest.failed.length) o.log(`Fallaron: ${ingest.failed.map((f) => `${f.kind} (${f.error})`).join("; ")}`);
+  if (!ingest.downloaded.length) {
+    o.log("No se descarg\xF3 nada; no hay nada que cargar.");
+    writeSyncLog("fall\xF3: no se descarg\xF3 nada");
+    return 2;
+  }
+  const rep = loadDirectory(o.db, dir);
+  printReport(rep, o.log);
+  writeSyncLog(
+    `sync #${rep.runId} ${rep.status}${ingest.failed.length ? ` (${ingest.failed.length} fuentes fallaron)` : ""}`
+  );
+  return ingest.failed.length ? 3 : 0;
 }
 function printReport(rep, log) {
   log(`Sync #${rep.runId}: ${rep.status}`);

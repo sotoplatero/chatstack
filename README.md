@@ -83,9 +83,31 @@ copia a ningún archivo.
 Por debajo eso es `chatstack connect --cookies <archivo>`, que verifica la sesión y detecta tu
 publicación antes de guardar nada. **Borra ese archivo al terminar: contiene tu sesión.**
 
-Después, `chatstack sync` descarga todo (3-4 minutos; Substack limita el ritmo al recorrer las
-Notes). Repítelo cuando quieras datos frescos — semanalmente es buen ritmo para que el histórico
-sirva de algo.
+Después, `chatstack sync` descarga todo (3-4 minutos la primera vez; Substack limita el ritmo al
+recorrer las Notes).
+
+**Los siguientes syncs son incrementales y tardan ~10 segundos.** El feed del perfil ya devuelve
+los likes, restacks y respuestas de cada nota, así que basta comparar esos contadores con la base:
+solo se piden las interacciones de las notas que cambiaron. `--full` fuerza el sync completo.
+
+### Que se refresque solo
+
+Un hook de `SessionStart` en `~/.claude/settings.json` mantiene los datos frescos sin que lo pidas:
+
+```json
+{ "hooks": { "SessionStart": [{ "hooks": [{
+  "type": "command",
+  "command": "node ~/.claude/skills/chatstack/bin/chatstack.cjs sync --if-stale 6 --background",
+  "async": true
+}] }] } }
+```
+
+`--if-stale 6` sale en milisegundos si los datos tienen menos de 6 horas, así que en casi todas tus
+sesiones no hace nada. `--background` se desasocia y devuelve al instante: `SessionStart` bloquea el
+arranque de la sesión hasta que el comando termina. Y un candado impide que varias sesiones abiertas
+lancen syncs simultáneos contra una API que ya limita por ritmo.
+
+`chatstack status` muestra en `last_background_sync` cómo fue el último.
 
 ## Usar sin Claude
 
@@ -120,7 +142,7 @@ $CS sql "SELECT source, COUNT(*) n FROM subscribers WHERE is_active=1 GROUP BY s
 
 ```bash
 npm install
-npm test          # 54 tests
+npm test          # 72 tests
 npm run build     # tsc + snippets del navegador + bundle del skill
 ```
 

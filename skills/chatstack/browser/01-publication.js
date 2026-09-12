@@ -46,15 +46,15 @@ P.paso = 'publication';
 
   P.fase = 'estadisticas';
   await _csv('email_stats.csv', "/api/v1/publication/stats/email_stats?format=csv&columns%5B%5D=title&columns%5B%5D=post_date&columns%5B%5D=audience&columns%5B%5D=views&columns%5B%5D=engagement_rate&columns%5B%5D=signups&columns%5B%5D=subscribes&columns%5B%5D=estimated_value&columns%5B%5D=open_rate");
-  await _csv('growth_sources.csv', "/api/v1/publication/stats/growth/sources?from_date=2024-01-01&to_date=2026-09-11&format=csv");
-  await _csv('paid_subscriber_growth.csv', "/api/v1/publication/stats/paid_subscriber_growth?start=2024-01-01&end=2026-09-11&period=day&format=csv");
+  await _csv('growth_sources.csv', "/api/v1/publication/stats/growth/sources?from_date=2024-01-01&to_date=2026-09-12&format=csv");
+  await _csv('paid_subscriber_growth.csv', "/api/v1/publication/stats/paid_subscriber_growth?start=2024-01-01&end=2026-09-12&period=day&format=csv");
   // Substack devuelve esta serie sin cabecera; se la ponemos.
   await _csv('subscriber_totals.csv', "/api/v1/publication/stats/emails/timeseries?from=2024-01-01T00:00:00.000Z&format=csv&resolution=day", 'date,total_subscribers\n');
 
   // traffic: por tramos de 90 dias, o Substack agrega por mes y se pierde el detalle diario.
   P.fase = 'trafico';
   {
-    const chunks = ["/api/v1/publication/stats/publication_traffic/timeseries?from=2024-01-01&to=2024-03-30&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-03-31&to=2024-06-28&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-06-29&to=2024-09-26&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-09-27&to=2024-12-25&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-12-26&to=2025-03-25&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-03-26&to=2025-06-23&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-06-24&to=2025-09-21&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-09-22&to=2025-12-20&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-12-21&to=2026-03-20&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2026-03-21&to=2026-06-18&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2026-06-19&to=2026-09-11&format=csv"];
+    const chunks = ["/api/v1/publication/stats/publication_traffic/timeseries?from=2024-01-01&to=2024-03-30&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-03-31&to=2024-06-28&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-06-29&to=2024-09-26&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-09-27&to=2024-12-25&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2024-12-26&to=2025-03-25&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-03-26&to=2025-06-23&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-06-24&to=2025-09-21&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-09-22&to=2025-12-20&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2025-12-21&to=2026-03-20&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2026-03-21&to=2026-06-18&format=csv","/api/v1/publication/stats/publication_traffic/timeseries?from=2026-06-19&to=2026-09-12&format=csv"];
     let header = '', lines = [];
     for (const u of chunks) {
       const t = await _get(u, true);

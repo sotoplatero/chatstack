@@ -51,6 +51,31 @@ trae `Activity` (0-5), emails abiertos 7d/30d/6mo, post views, clicks y días ac
 contacto. El loader lo normaliza a claves estables en `extra` y `find_upgrade_candidates`
 ordena por ellas; con el export legado (sin engagement) degrada a antigüedad y lo declara.
 
+## Sync incremental y hook de arranque (2026-09-12)
+
+El sync completo tardaba 3-4 minutos y el 95% era recorrer las notas: 231 notas, 228 peticiones de
+interacciones. La clave es que **el feed del perfil ya devuelve `reaction_count`, `restacks` y
+`children_count` de cada nota**, sin coste: comparándolos con la BD, solo hay que pedir las
+interacciones de las que cambiaron. Y como el feed viene ordenado por fecha, se corta la paginación
+tras 3 páginas seguidas sin novedad.
+
+Medido sobre la cuenta real: **11,7 s** sin novedades (frente a 3-4 min), 117 s tras dos días sin
+sincronizar (29 notas cambiadas). Acortando además el rango de las series a 120 días en incremental
+—`traffic` se pide en tramos de 90 días, así que pasó de 11 peticiones a 1— baja a **9 s**.
+
+Guardias para que un hook global sea tolerable, en `src/syncControl.ts`:
+- `--if-stale <horas>`: lee `last_sync` y sale en milisegundos si los datos están frescos.
+- `--background`: el CLI se relanza desasociado y devuelve al instante. Lo hace el CLI y no el shell
+  porque `SessionStart` bloquea el arranque de la sesión hasta que el comando acaba, y así el hook
+  es idéntico en Windows, macOS y Linux.
+- Candado en `~/.chatstack/sync.lock` (pid + hora, caduca a los 15 min): tres sesiones abiertas
+  lanzarían tres syncs contra una API que ya responde 429.
+- `~/.chatstack/last-sync.log`, que `status` expone en `last_background_sync`: si el sync de fondo
+  falló por sesión caducada, el modelo lo ve al consultar en vez de dar datos viejos en silencio.
+
+Se descartó usar un subagente: el sync es un comando determinista, así que un agente añadiría
+latencia y tokens sin aportar decisiones. El aviso de fallo lo cubre el registro anterior.
+
 ## Skill compartible (2026-09-11)
 
 Objetivo: que cualquiera lo instale, no solo el autor. Tres cambios:

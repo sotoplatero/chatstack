@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { collectNotes } from "./notes.js";
+import { collectNotes, type NoteCounts } from "./notes.js";
 import {
   DEFAULT_FROM, PUB, SUBSCRIBER_EXPORT_COLUMNS, SUBSCRIBER_SET_QUERY, dateChunks, pubOrigin, today,
 } from "./endpoints.js";
@@ -21,6 +21,17 @@ export interface IngestOptions {
   fetchImpl?: typeof fetch;
   /** Esperas entre reintentos/sondeos; los tests las acortan. */
   delays?: Partial<Delays>;
+  /**
+   * Estado de las notas ya guardadas. Presente = sync incremental: solo se piden las interacciones
+   * de las notas cuyos contadores han cambiado. Ausente = sync completo.
+   */
+  knownNotes?: { counts: Map<number, NoteCounts>; withStats: Set<number> };
+  /**
+   * Desde cuándo pedir las series temporales. En incremental basta con los últimos meses: las
+   * filas viejas ya están en la BD y no cambian. `traffic` se pide por tramos de 90 días, así que
+   * acortar el rango es la diferencia entre 11 peticiones y 1.
+   */
+  seriesFrom?: string;
 }
 
 export interface Delays {
@@ -196,21 +207,26 @@ export async function ingestSubstack(opts: IngestOptions): Promise<IngestReport>
   const log = opts.log ?? (() => {});
   mkdirSync(opts.rawDir, { recursive: true });
   const client = new SubstackClient(opts.subdomain, opts.cookie, log, opts.fetchImpl, opts.delays);
+  const desde = opts.seriesFrom ?? DEFAULT_FROM;
   const report: IngestReport = { rawDir: opts.rawDir, downloaded: [], failed: [], sessionExpired: false };
 
   const steps: { kind: string; file: string; run: () => Promise<string> }[] = [
     { kind: "email_list", file: "email_list.csv", run: () => client.subscriberExport() },
     { kind: "posts", file: "posts.csv", run: () => client.postsCsv() },
     { kind: "email_stats", file: "email_stats.csv", run: () => client.emailStats() },
-    { kind: "growth_sources", file: "growth_sources.csv", run: () => client.growthSources() },
-    { kind: "traffic", file: "traffic.csv", run: () => client.traffic() },
-    { kind: "paid_subscriber_growth", file: "paid_subscriber_growth.csv", run: () => client.paidSubscriberGrowth() },
-    { kind: "subscriber_totals", file: "subscriber_totals.csv", run: () => client.subscriberTotals() },
+    { kind: "growth_sources", file: "growth_sources.csv", run: () => client.growthSources(desde) },
+    { kind: "traffic", file: "traffic.csv", run: () => client.traffic(desde) },
+    { kind: "paid_subscriber_growth", file: "paid_subscriber_growth.csv", run: () => client.paidSubscriberGrowth(desde) },
+    { kind: "subscriber_totals", file: "subscriber_totals.csv", run: () => client.subscriberTotals(desde) },
     {
       kind: "notes",
       file: "notes.json",
       run: async () => {
-        const bundle = await collectNotes(client, { log });
+        const bundle = await collectNotes(client, {
+          log,
+          known: opts.knownNotes?.counts,
+          withStats: opts.knownNotes?.withStats,
+        });
         if (bundle.errors.length) log(`  ${bundle.errors.length} peticiones de notas fallaron (se conserva el resto)`);
         return JSON.stringify(bundle);
       },
@@ -219,8 +235,10 @@ export async function ingestSubstack(opts: IngestOptions): Promise<IngestReport>
 
   for (const step of steps) {
     try {
+      const t0 = Date.now();
       log(`→ ${step.kind}`);
       const text = await step.run();
+      log(`  ${step.kind}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
       if (!step.file.endsWith(".json") && text.trim().split(/\r?\n/).length < 2) throw new Error("respuesta vacía");
       const path = join(opts.rawDir, step.file);
       writeFileSync(path, text, "utf8");

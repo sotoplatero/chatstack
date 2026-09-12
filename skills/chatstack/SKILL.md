@@ -96,10 +96,32 @@ las lista: repite con `--sub <subdominio>`. Luego `$CS sync` lo descarga todo (3
 
 ## Refrescar
 
-Con sesión guardada (vía B): `$CS sync`. Si dice que caducó, repetir `connect` con un cURL nuevo.
-Con la vía A: repetir sus tres pasos. La vía B es más barata para sincronizar a menudo — no gasta
-contexto — así que si el usuario va a hacerlo con frecuencia, merece la pena que conecte una vez
-con el cURL aunque tenga la extensión.
+`$CS sync` es **incremental** por defecto: compara los contadores que el feed ya devuelve gratis con
+lo que hay en la BD y solo pide las interacciones de las notas que cambiaron, además de acortar el
+rango de las series. Unos 10 s sin novedades, frente a 3-4 min de `--full`.
+
+Para que los datos estén frescos sin pedirlo, un hook de `SessionStart`:
+
+```json
+{ "hooks": { "SessionStart": [{ "hooks": [{
+  "type": "command",
+  "command": "node --no-warnings=ExperimentalWarning \"<SKILL_DIR>/bin/chatstack.cjs\" sync --if-stale 6 --background",
+  "async": true
+}] }] } }
+```
+
+`--if-stale 6` sale en milisegundos si los datos tienen menos de 6 horas, así que en la mayoría de
+sesiones no hace nada. `--background` se desasocia y devuelve al instante, porque `SessionStart`
+bloquea el arranque hasta que el comando acaba. Un candado en `~/.chatstack/sync.lock` evita que
+varias sesiones abiertas lancen syncs simultáneos.
+
+El resultado queda en `last_background_sync` de `$CS status`: **míralo antes de responder**. Si dice
+que falló porque la sesión caducó, avísale en vez de dar datos viejos en silencio.
+
+Si `sync` dice que la sesión caducó, hay que repetir `connect` con un cURL nuevo. Con la vía A,
+repetir sus tres pasos. La vía B es más barata para sincronizar a menudo —no gasta contexto—, así
+que si el usuario va a hacerlo con frecuencia merece la pena que conecte una vez con el cURL aunque
+tenga la extensión.
 
 ## Consultas
 
