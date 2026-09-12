@@ -44,7 +44,7 @@ const PAID_GROWTH = `date,new_paid,upgrades,trials_started,cancellations_initiat
 `;
 
 function fixtureDir(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "constack-fix-"));
+  const dir = mkdtempSync(join(tmpdir(), "stackchat-fix-"));
   for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content, "utf8");
   return dir;
 }

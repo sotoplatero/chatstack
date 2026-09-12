@@ -2,7 +2,7 @@ import type { Db } from "./db/index.js";
 import * as q from "./queries.js";
 
 /**
- * Despacho de `constack q <nombre> [--flag valor]`. Es la cara de línea de comandos de las mismas
+ * Despacho de `stackchat q <nombre> [--flag valor]`. Es la cara de línea de comandos de las mismas
  * funciones que expone el servidor MCP: una sola implementación, dos formas de invocarla.
  */
 

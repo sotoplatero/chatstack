@@ -25,7 +25,7 @@ describe("parseFlags", () => {
 describe("runQuery", () => {
   let db: Db;
   beforeAll(() => {
-    const dir = mkdtempSync(join(tmpdir(), "constack-qc-"));
+    const dir = mkdtempSync(join(tmpdir(), "stackchat-qc-"));
     writeFileSync(join(dir, "email_list.csv"), EMAIL_LIST);
     db = openDb(":memory:");
     loadDirectory(db, dir);

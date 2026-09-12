@@ -17,7 +17,7 @@ function safe<T>(fn: () => T) {
 }
 
 export function buildServer(db: Db): McpServer {
-  const server = new McpServer({ name: "constack", version: "0.1.0" });
+  const server = new McpServer({ name: "stackchat", version: "0.1.0" });
 
   server.registerTool(
     "get_overview",

@@ -3067,7 +3067,7 @@ function safe(fn) {
   }
 }
 function buildServer(db) {
-  const server = new import_mcp.McpServer({ name: "constack", version: "0.1.0" });
+  const server = new import_mcp.McpServer({ name: "stackchat", version: "0.1.0" });
   server.registerTool(
     "get_overview",
     {
@@ -5605,7 +5605,7 @@ function collectCsvPaths(dir) {
     const ext = (0, import_node_path2.extname)(name).toLowerCase();
     if (ext === ".csv") out.push(p);
     else if (ext === ".zip") {
-      const tmp = (0, import_node_fs3.mkdtempSync)((0, import_node_path2.join)((0, import_node_os.tmpdir)(), "constack-zip-"));
+      const tmp = (0, import_node_fs3.mkdtempSync)((0, import_node_path2.join)((0, import_node_os.tmpdir)(), "stackchat-zip-"));
       new import_adm_zip.default(p).extractAllTo(tmp, true);
       for (const inner of (0, import_node_fs3.readdirSync)(tmp)) if ((0, import_node_path2.extname)(inner).toLowerCase() === ".csv") out.push((0, import_node_path2.join)(tmp, inner));
     }

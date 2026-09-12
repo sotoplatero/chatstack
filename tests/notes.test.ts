@@ -61,7 +61,7 @@ describe("collectNotes", () => {
 
 describe("bundle stackchat-files (vía navegador)", () => {
   it("materializa los CSV que trae dentro y los carga como si fueran archivos sueltos", () => {
-    const dir = mkdtempSync(join(tmpdir(), "constack-bundle-"));
+    const dir = mkdtempSync(join(tmpdir(), "stackchat-bundle-"));
     writeFileSync(
       join(dir, "stackchat-publication.json"),
       JSON.stringify({
@@ -97,7 +97,7 @@ describe("bundle stackchat-files (vía navegador)", () => {
   });
 
   it("un JSON con kind desconocido no rompe la carga", () => {
-    const dir = mkdtempSync(join(tmpdir(), "constack-bundle-"));
+    const dir = mkdtempSync(join(tmpdir(), "stackchat-bundle-"));
     writeFileSync(join(dir, "otra-cosa.json"), JSON.stringify({ kind: "vete-a-saber" }));
     writeFileSync(join(dir, "traffic.csv"), "Date,Views\n2026/06/11,7\n");
     const db = openDb(":memory:");
@@ -113,7 +113,7 @@ describe("loadNotes + queries", () => {
   it("carga el bundle, es idempotente y responde quién interactúa más", async () => {
     const client = new SubstackClient("x", "substack.sid=s", () => {}, fakeNotesApi(), { retryBaseMs: 1, pollMs: 1, pauseMs: 0 });
     const bundle: NotesBundle = await collectNotes(client);
-    const dir = mkdtempSync(join(tmpdir(), "constack-notes-"));
+    const dir = mkdtempSync(join(tmpdir(), "stackchat-notes-"));
     writeFileSync(join(dir, "notes.json"), JSON.stringify(bundle));
     writeFileSync(
       join(dir, "email_list.csv"),

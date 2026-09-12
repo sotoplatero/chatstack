@@ -1,4 +1,4 @@
-# constack — MCP server local para datos de Substack
+# stackchat — MCP server local para datos de Substack
 
 Fecha: 2026-09-08. Réplica funcional de "StackContacts MCP Server" limitada a Substack.
 
@@ -21,10 +21,10 @@ métricas de una publicación de Substack, sobre una base de datos local y con h
 
 ## Arquitectura
 ```
-constack sync  → ingest/ (HTTP + cookie de sesión → ./data/raw/<timestamp>/*.csv)
-               → load/   (CSV → SQLite ./data/constack.db, idempotente)
-constack load <dir>      (solo load/, para CSV bajados a mano)
-constack mcp   → mcp/    (server stdio, solo lectura)
+stackchat sync  → ingest/ (HTTP + cookie de sesión → ./data/raw/<timestamp>/*.csv)
+               → load/   (CSV → SQLite ./data/stackchat.db, idempotente)
+stackchat load <dir>      (solo load/, para CSV bajados a mano)
+stackchat mcp   → mcp/    (server stdio, solo lectura)
 ```
 Los tres módulos se comunican únicamente por el sistema de archivos y la BD.
 
@@ -128,7 +128,7 @@ recomienda conectar con cURL a quien vaya a sincronizar a menudo, aunque tenga l
 El consumo principal pasa a ser el skill `stackchat`, no el servidor MCP: las 12 tools del MCP
 ocupaban contexto en todas las sesiones, también las que no van de Substack, mientras que un skill
 se carga solo al invocarse. Las consultas se extraen a `src/queries.ts` (ya no son código del MCP)
-y se exponen por CLI en `src/queryCommand.ts` como `constack q <nombre> --flags` más `constack sql`.
+y se exponen por CLI en `src/queryCommand.ts` como `stackchat q <nombre> --flags` más `stackchat sql`.
 El servidor MCP se conserva para Claude Desktop pero se desregistra de Claude Code.
 La fuente del skill vive en `skills/stackchat/` y se enlaza a `~/.claude/skills/stackchat` con un
 junction de Windows (no requiere admin y refleja las ediciones del repo sin recopiar).

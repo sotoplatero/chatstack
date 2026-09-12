@@ -42,7 +42,7 @@ export function collectCsvPaths(dir: string): string[] {
     const ext = extname(name).toLowerCase();
     if (ext === ".csv") out.push(p);
     else if (ext === ".zip") {
-      const tmp = mkdtempSync(join(tmpdir(), "constack-zip-"));
+      const tmp = mkdtempSync(join(tmpdir(), "stackchat-zip-"));
       new AdmZip(p).extractAllTo(tmp, true);
       for (const inner of readdirSync(tmp)) if (extname(inner).toLowerCase() === ".csv") out.push(join(tmp, inner));
     }

@@ -31,7 +31,7 @@ const GROWTH = `Date,Source,Category,Unique visitors,New subscribers,New revenue
 `;
 
 function dir(files: Record<string, string>) {
-  const d = mkdtempSync(join(tmpdir(), "constack-q-"));
+  const d = mkdtempSync(join(tmpdir(), "stackchat-q-"));
   for (const [n, c] of Object.entries(files)) writeFileSync(join(d, n), c);
   return d;
 }

@@ -105,7 +105,7 @@ describe("dateChunks", () => {
 describe("ingestSubstack", () => {
   it("descarga los 8 exports por API, reintenta 503 y produce CSV que el loader reconoce", async () => {
     const { fetchImpl, seen } = fakeSubstack();
-    const rawDir = mkdtempSync(join(tmpdir(), "constack-ing-"));
+    const rawDir = mkdtempSync(join(tmpdir(), "stackchat-ing-"));
     const rep = await ingestSubstack({ subdomain: "x", rawDir, cookie: "substack.sid=s", fetchImpl, delays: { retryBaseMs: 1, pollMs: 1, pauseMs: 0 } });
     expect(rep.failed).toEqual([]);
     expect(rep.downloaded.map((d) => d.kind).sort()).toEqual(
@@ -130,7 +130,7 @@ describe("ingestSubstack", () => {
 
   it("corta al detectar sesión caducada", async () => {
     const fetchImpl: typeof fetch = async () => new Response("<!doctype html><html>login</html>", { status: 200, headers: { "content-type": "text/html" } });
-    const rep = await ingestSubstack({ subdomain: "x", rawDir: mkdtempSync(join(tmpdir(), "constack-ing-")), cookie: "substack.sid=s", fetchImpl });
+    const rep = await ingestSubstack({ subdomain: "x", rawDir: mkdtempSync(join(tmpdir(), "stackchat-ing-")), cookie: "substack.sid=s", fetchImpl });
     expect(rep.sessionExpired).toBe(true);
     expect(rep.downloaded).toEqual([]);
   });
