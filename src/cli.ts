@@ -9,39 +9,39 @@ import { helpText, parseFlags, runQuery, UsageError } from "./queryCommand.js";
 import { knownNotes, querySql } from "./queries.js";
 import { connect } from "./connect.js";
 import { acquireLock, isFresh, readLastSyncLog, relaunchDetached, releaseLock, writeSyncLog } from "./syncControl.js";
-import { authPath, chatstackHome, dbPath as resolveDbPath, loadConfig, rawDir, resolveSubdomain } from "./paths.js";
+import { authPath, stackchatHome, dbPath as resolveDbPath, loadConfig, rawDir, resolveSubdomain } from "./paths.js";
 
-const HELP = `chatstack — tus datos de Substack en una base local que puedes consultar
+const HELP = `stackchat — tus datos de Substack en una base local que puedes consultar
 
 Uso:
-  chatstack connect --cookies <archivo.curl> [--sub <subdominio>]
-                  Verifica tu sesión, detecta tu publicación y lo guarda en ~/.chatstack.
+  stackchat connect --cookies <archivo.curl> [--sub <subdominio>]
+                  Verifica tu sesión, detecta tu publicación y lo guarda en ~/.stackchat.
                   El archivo sale de Chrome: en el panel de Substack, F12 → Network →
                   recargar → clic derecho en la primera petición → Copy as cURL (bash).
-  chatstack status
+  stackchat status
                   Dice si hay sesión, a qué publicación apunta y cuándo fue el último sync.
-  chatstack sync  [--full] [--if-stale <horas>] [--background] [--sub <subdominio>]
+  stackchat sync  [--full] [--if-stale <horas>] [--background] [--sub <subdominio>]
                   Descarga tus datos de Substack y los carga en la base. Por defecto es
                   incremental: solo pide las interacciones de las notas cuyos contadores
                   han cambiado, y acorta el rango de las series (~10 s sin novedades,
                   frente a 3-4 min de un sync completo). --full lo fuerza todo.
                   --if-stale N no hace nada si el último sync es más reciente que N horas.
                   --background se desasocia y devuelve al instante (para hooks).
-  chatstack load  <carpeta>
+  stackchat load  <carpeta>
                   Carga CSV/ZIP/notes.json ya descargados (lo usa la vía del navegador).
-  chatstack q <consulta> [--flags]
+  stackchat q <consulta> [--flags]
                   Consulta la base y escribe JSON en stdout. Consultas:
 ${helpText()}
 
-  chatstack sql "<SELECT ...>" [--max-rows N]
+  stackchat sql "<SELECT ...>" [--max-rows N]
                   SELECT de solo lectura sobre la base (LIMIT 200 por defecto).
 
-Todo vive en ~/.chatstack (config.json, auth.json, chatstack.db, raw/).
-Variables: CHATSTACK_HOME, CHATSTACK_DB, CHATSTACK_SUB.
+Todo vive en ~/.stackchat (config.json, auth.json, stackchat.db, raw/).
+Variables: STACKCHAT_HOME, STACKCHAT_DB, STACKCHAT_SUB.
 `;
 
 async function main() {
-  // `chatstack q ... | head` cierra la salida antes de tiempo: sin esto Node vuelca un EPIPE feo.
+  // `stackchat q ... | head` cierra la salida antes de tiempo: sin esto Node vuelca un EPIPE feo.
   for (const s of [process.stdout, process.stderr]) {
     s.on("error", (e: NodeJS.ErrnoException) => {
       if (e.code === "EPIPE") process.exit(0);
@@ -59,7 +59,7 @@ async function main() {
     const flags = parseFlags(argv.slice(2));
     const db = openDb(resolveDbPath(typeof flags.db === "string" ? flags.db : undefined));
     if (!name) {
-      log(cmd === "q" ? `Falta la consulta: chatstack q <consulta>\n\n${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
+      log(cmd === "q" ? `Falta la consulta: stackchat q <consulta>\n\n${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
       process.exit(2);
     }
     const result =
@@ -93,7 +93,7 @@ async function main() {
     case "connect": {
       if (!values.cookies) {
         log(
-          "Falta el archivo: chatstack connect --cookies <archivo.curl>\n\n" +
+          "Falta el archivo: stackchat connect --cookies <archivo.curl>\n\n" +
             "Sácalo de Chrome: abre el panel de tu Substack, F12 → pestaña Network → recarga con\n" +
             "Ctrl+R → clic derecho en la primera petición → Copy → Copy as cURL (bash) → pégalo\n" +
             "en un archivo de texto y pasa su ruta aquí.",
@@ -113,9 +113,9 @@ async function main() {
         `Conectado como ${r.identity.handle ?? r.identity.user_id} → ${r.config.subdomain}` +
           `${r.config.publication_name ? ` (${r.config.publication_name})` : ""}`,
       );
-      log(`Guardado en ${chatstackHome()}`);
+      log(`Guardado en ${stackchatHome()}`);
       log(`Borra ${curlFile} cuando termines: contiene tu sesión.`);
-      log("Ahora: chatstack sync");
+      log("Ahora: stackchat sync");
       return;
     }
     case "status": {
@@ -128,7 +128,7 @@ async function main() {
       process.stdout.write(
         JSON.stringify(
           {
-            home: chatstackHome(),
+            home: stackchatHome(),
             connected: !!auth,
             subdomain: config?.subdomain ?? null,
             publication_name: config?.publication_name ?? null,
@@ -152,7 +152,7 @@ async function main() {
     case "load": {
       const dir = positionals[1];
       if (!dir) {
-        log("Falta la carpeta: chatstack load <carpeta>");
+        log("Falta la carpeta: stackchat load <carpeta>");
         process.exit(2);
       }
       printReport(loadDirectory(openDb(dbFile), resolve(dir)), log);
@@ -162,7 +162,7 @@ async function main() {
       const sub = resolveSubdomain(values.sub);
       const auth = loadAuth(authPath());
       if (!sub || !auth) {
-        log("No hay sesión guardada. Ejecuta primero:\n  chatstack connect --cookies <archivo.curl>");
+        log("No hay sesión guardada. Ejecuta primero:\n  stackchat connect --cookies <archivo.curl>");
         process.exit(2);
       }
       const db = openDb(dbFile);
@@ -231,7 +231,7 @@ async function runSync(o: {
     seriesFrom: o.full ? undefined : new Date(Date.now() - 120 * 86_400_000).toISOString().slice(0, 10),
   });
   if (ingest.sessionExpired) {
-    o.log("La sesión de Substack ha caducado. Repite `chatstack connect` con un cURL nuevo.");
+    o.log("La sesión de Substack ha caducado. Repite `stackchat connect` con un cURL nuevo.");
     writeSyncLog("falló: la sesión de Substack ha caducado");
     return 2;
   }

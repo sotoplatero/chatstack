@@ -3,7 +3,7 @@ import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { connect, verifySession, extractPublications, NotConnectedError } from "../src/connect.js";
-import { chatstackHome, configPath, authPath, loadConfig, dbPath } from "../src/paths.js";
+import { stackchatHome, configPath, authPath, loadConfig, dbPath } from "../src/paths.js";
 
 const COOKIE = "substack.sid=s%3Aabc; cf_clearance=x";
 
@@ -54,11 +54,11 @@ describe("verifySession", () => {
 describe("connect", () => {
   let home: string;
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "chatstack-home-"));
-    process.env.CHATSTACK_HOME = home;
+    home = mkdtempSync(join(tmpdir(), "stackchat-home-"));
+    process.env.STACKCHAT_HOME = home;
   });
   afterEach(() => {
-    delete process.env.CHATSTACK_HOME;
+    delete process.env.STACKCHAT_HOME;
     rmSync(home, { recursive: true, force: true });
   });
 
@@ -90,11 +90,11 @@ describe("connect", () => {
 });
 
 describe("paths", () => {
-  it("CHATSTACK_HOME manda, y `:memory:` no se convierte en ruta", () => {
-    process.env.CHATSTACK_HOME = "C:/tmp/x";
-    expect(chatstackHome().replace(/\\/g, "/")).toBe("C:/tmp/x");
+  it("STACKCHAT_HOME manda, y `:memory:` no se convierte en ruta", () => {
+    process.env.STACKCHAT_HOME = "C:/tmp/x";
+    expect(stackchatHome().replace(/\\/g, "/")).toBe("C:/tmp/x");
     expect(dbPath(":memory:")).toBe(":memory:");
-    expect(dbPath().replace(/\\/g, "/")).toBe("C:/tmp/x/chatstack.db");
-    delete process.env.CHATSTACK_HOME;
+    expect(dbPath().replace(/\\/g, "/")).toBe("C:/tmp/x/stackchat.db");
+    delete process.env.STACKCHAT_HOME;
   });
 });

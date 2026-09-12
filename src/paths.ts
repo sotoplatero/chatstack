@@ -3,8 +3,8 @@ import { join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 /**
- * Todo lo del usuario vive en `~/.chatstack/`, no en el repo: es lo que permite que el skill
- * se instale en cualquier máquina sin rutas incrustadas. `CHATSTACK_HOME` lo redirige (tests).
+ * Todo lo del usuario vive en `~/.stackchat/`, no en el repo: es lo que permite que el skill
+ * se instale en cualquier máquina sin rutas incrustadas. `STACKCHAT_HOME` lo redirige (tests).
  */
 
 export interface Config {
@@ -16,23 +16,23 @@ export interface Config {
   connected_at?: string;
 }
 
-export function chatstackHome(): string {
-  return process.env.CHATSTACK_HOME ? resolve(process.env.CHATSTACK_HOME) : join(homedir(), ".chatstack");
+export function stackchatHome(): string {
+  return process.env.STACKCHAT_HOME ? resolve(process.env.STACKCHAT_HOME) : join(homedir(), ".stackchat");
 }
 
-export const configPath = () => join(chatstackHome(), "config.json");
-export const authPath = () => join(chatstackHome(), "auth.json");
-export const rawDir = () => join(chatstackHome(), "raw");
+export const configPath = () => join(stackchatHome(), "config.json");
+export const authPath = () => join(stackchatHome(), "auth.json");
+export const rawDir = () => join(stackchatHome(), "raw");
 
 /** `:memory:` no es una ruta; resolverla crearía un archivo con ese nombre. */
 export function dbPath(override?: string): string {
-  const v = override ?? process.env.CHATSTACK_DB ?? process.env.CONSTACK_DB;
+  const v = override ?? process.env.STACKCHAT_DB ?? process.env.CONSTACK_DB;
   if (v === ":memory:") return v;
-  return v ? resolve(v) : join(chatstackHome(), "chatstack.db");
+  return v ? resolve(v) : join(stackchatHome(), "stackchat.db");
 }
 
 export function ensureHome(): string {
-  const dir = chatstackHome();
+  const dir = stackchatHome();
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -56,5 +56,5 @@ export function saveConfig(c: Config): Config {
 
 /** El subdominio efectivo: primero lo que pida quien llama, luego el guardado, luego la variable. */
 export function resolveSubdomain(explicit?: string): string | null {
-  return explicit ?? loadConfig()?.subdomain ?? process.env.CHATSTACK_SUB ?? process.env.CONSTACK_SUB ?? null;
+  return explicit ?? loadConfig()?.subdomain ?? process.env.STACKCHAT_SUB ?? process.env.CONSTACK_SUB ?? null;
 }

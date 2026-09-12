@@ -59,13 +59,13 @@ describe("collectNotes", () => {
   });
 });
 
-describe("bundle chatstack-files (vía navegador)", () => {
+describe("bundle stackchat-files (vía navegador)", () => {
   it("materializa los CSV que trae dentro y los carga como si fueran archivos sueltos", () => {
     const dir = mkdtempSync(join(tmpdir(), "constack-bundle-"));
     writeFileSync(
-      join(dir, "chatstack-publication.json"),
+      join(dir, "stackchat-publication.json"),
       JSON.stringify({
-        kind: "chatstack-files",
+        kind: "stackchat-files",
         fetched_at: "2026-09-11T00:00:00.000Z",
         files: {
           "email_list.csv": "Email,Name,Type,Start date,Cancel date\nana@x.com,Ana,Free,2026-06-01,\n",
@@ -82,7 +82,18 @@ describe("bundle chatstack-files (vía navegador)", () => {
     expect(db.prepare("SELECT email FROM subscribers").get()).toEqual({ email: "ana@x.com" });
     expect(db.prepare("SELECT date, views FROM traffic").get()).toEqual({ date: "2026-06-11", views: 7 });
     // Queda registrado de qué archivo salió cada cosa.
-    expect(db.prepare("SELECT kind FROM raw_files WHERE kind = 'chatstack-files'").get()).toEqual({ kind: "chatstack-files" });
+    expect(db.prepare("SELECT kind FROM raw_files WHERE kind = 'stackchat-files'").get()).toEqual({ kind: "stackchat-files" });
+  });
+
+  it("acepta el nombre anterior al renombrado, para bundles ya generados", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stackchat-legacy-"));
+    writeFileSync(
+      join(dir, "viejo.json"),
+      JSON.stringify({ kind: "chatstack-files", files: { "traffic.csv": "Date,Views\n2026/06/11,3\n" } }),
+    );
+    const db = openDb(":memory:");
+    expect(loadDirectory(db, dir).status).toBe("ok");
+    expect(db.prepare("SELECT views FROM traffic").get()).toEqual({ views: 3 });
   });
 
   it("un JSON con kind desconocido no rompe la carga", () => {

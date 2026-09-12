@@ -12,11 +12,11 @@ import { startRun, finishRun } from "../src/db/index.js";
 
 let home: string;
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "chatstack-sc-"));
-  process.env.CHATSTACK_HOME = home;
+  home = mkdtempSync(join(tmpdir(), "stackchat-sc-"));
+  process.env.STACKCHAT_HOME = home;
 });
 afterEach(() => {
-  delete process.env.CHATSTACK_HOME;
+  delete process.env.STACKCHAT_HOME;
   rmSync(home, { recursive: true, force: true });
 });
 

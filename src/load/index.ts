@@ -53,7 +53,7 @@ export function collectCsvPaths(dir: string): string[] {
 /**
  * Bundles JSON que acompañan a los CSV en el directorio crudo:
  *  - `kind: "notes"`            — notas e interacciones (lo produce la ingesta y el navegador).
- *  - `kind: "chatstack-files"`  — varios CSV dentro de un solo archivo. La vía del navegador lo usa
+ *  - `kind: "stackchat-files"`  — varios CSV dentro de un solo archivo. La vía del navegador lo usa
  *    porque Chrome bloquea las descargas automáticas múltiples: un archivo, una descarga.
  */
 function loadJsonBundles(
@@ -76,9 +76,10 @@ function loadJsonBundles(
         rep.rows = data.notes.length;
         insRaw.run(runId, "notes", path, sha, rep.rows);
         rep.result = loadNotes(db, runId, data as NotesBundle);
-      } else if (data.kind === "chatstack-files" && data.files && typeof data.files === "object") {
+        // "chatstack-files" es el nombre anterior al renombrado; se acepta para no romper bundles ya generados.
+      } else if ((data.kind === "stackchat-files" || data.kind === "chatstack-files") && data.files && typeof data.files === "object") {
         // Se materializan a un directorio temporal para reusar tal cual la ruta de CSV.
-        const tmp = mkdtempSync(join(tmpdir(), "chatstack-bundle-"));
+        const tmp = mkdtempSync(join(tmpdir(), "stackchat-bundle-"));
         const written: string[] = [];
         for (const [fileName, content] of Object.entries(data.files)) {
           if (typeof content !== "string") continue;
@@ -86,7 +87,7 @@ function loadJsonBundles(
           writeFileSync(p, content, "utf8");
           written.push(p);
         }
-        insRaw.run(runId, "chatstack-files", path, sha, written.length);
+        insRaw.run(runId, "stackchat-files", path, sha, written.length);
         files.push(...loadCsvPaths(db, runId, written, insRaw));
         continue; // sus CSV ya se reportan uno a uno; el contenedor no añade una fila propia
       } else rep.error = "JSON sin `kind` reconocido; no cargado";

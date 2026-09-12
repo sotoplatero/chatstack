@@ -12,7 +12,7 @@ import { statSync } from "node:fs";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // .cjs explícito: algunas dependencias (adm-zip) son CommonJS y usan require dinámico, que no
 // existe en ESM. La extensión evita además depender de si hay un package.json "type" al lado.
-const outfile = join(root, "skills", "chatstack", "bin", "chatstack.cjs");
+const outfile = join(root, "skills", "stackchat", "bin", "stackchat.cjs");
 
 await build({
   entryPoints: [join(root, "src", "cli.ts")],

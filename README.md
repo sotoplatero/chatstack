@@ -1,4 +1,4 @@
-# chatstack
+# stackchat
 
 Tus datos de Substack en una base SQLite local que puedes preguntar en lenguaje natural, desde
 Claude Code.
@@ -9,10 +9,10 @@ Claude Code.
 > ¿Quiénes son mis mejores candidatos a pasar a pago, y por qué?
 
 Substack reparte esas respuestas entre cinco pantallas y varios CSV que hay que descargar a mano.
-chatstack los reúne en una base local y se los da a Claude.
+stackchat los reúne en una base local y se los da a Claude.
 
 **Todo se queda en tu máquina.** No hay servidor, no hay cuenta que crear, no se envía nada a
-ningún sitio. La base es un archivo en `~/.chatstack/`.
+ningún sitio. La base es un archivo en `~/.stackchat/`.
 
 ## Qué reúne
 
@@ -26,10 +26,10 @@ ningún sitio. La base es un archivo en `~/.chatstack/`.
 
 ## Instalar
 
-chatstack es un **skill**: no hay que registrar ningún servidor MCP.
+stackchat es un **skill**: no hay que registrar ningún servidor MCP.
 
 ```bash
-npx skills add sotoplatero/chatstack
+npx skills add sotoplatero/stackchat
 ```
 
 Eso es todo. Sirve para Claude Code, Cursor, Codex, Cline y el resto de agentes que soporta
@@ -42,19 +42,19 @@ nada que compilar ni ningún `npm install`.
 <details>
 <summary>Instalar a mano, sin el CLI de skills</summary>
 
-La carpeta `skills/chatstack` es autocontenida (SKILL.md + el binario + los snippets), así que
+La carpeta `skills/stackchat` es autocontenida (SKILL.md + el binario + los snippets), así que
 basta con dejarla donde tu agente busca los skills:
 
 ```bash
 # macOS / Linux
-git clone https://github.com/sotoplatero/chatstack.git ~/chatstack
-ln -s ~/chatstack/skills/chatstack ~/.claude/skills/chatstack
+git clone https://github.com/sotoplatero/stackchat.git ~/stackchat
+ln -s ~/stackchat/skills/stackchat ~/.claude/skills/stackchat
 ```
 
 ```powershell
 # Windows (junction: no pide permisos de administrador)
-git clone https://github.com/sotoplatero/chatstack.git $HOME\chatstack
-New-Item -ItemType Junction -Path "$HOME\.claude\skills\chatstack" -Target "$HOME\chatstack\skills\chatstack"
+git clone https://github.com/sotoplatero/stackchat.git $HOME\stackchat
+New-Item -ItemType Junction -Path "$HOME\.claude\skills\stackchat" -Target "$HOME\stackchat\skills\stackchat"
 ```
 
 Enlazado en vez de copiado, un `git pull` lo actualiza sin tocar nada más.
@@ -80,10 +80,10 @@ copia a ningún archivo.
 3. Clic derecho en la primera petición → **Copy** → **Copy as cURL (bash)**.
 4. Pégalo en un archivo de texto y pásale la ruta a Claude.
 
-Por debajo eso es `chatstack connect --cookies <archivo>`, que verifica la sesión y detecta tu
+Por debajo eso es `stackchat connect --cookies <archivo>`, que verifica la sesión y detecta tu
 publicación antes de guardar nada. **Borra ese archivo al terminar: contiene tu sesión.**
 
-Después, `chatstack sync` descarga todo (3-4 minutos la primera vez; Substack limita el ritmo al
+Después, `stackchat sync` descarga todo (3-4 minutos la primera vez; Substack limita el ritmo al
 recorrer las Notes).
 
 **Los siguientes syncs son incrementales y tardan ~10 segundos.** El feed del perfil ya devuelve
@@ -97,7 +97,7 @@ Un hook de `SessionStart` en `~/.claude/settings.json` mantiene los datos fresco
 ```json
 { "hooks": { "SessionStart": [{ "hooks": [{
   "type": "command",
-  "command": "node ~/.claude/skills/chatstack/bin/chatstack.cjs sync --if-stale 6 --background",
+  "command": "node ~/.claude/skills/stackchat/bin/stackchat.cjs sync --if-stale 6 --background",
   "async": true
 }] }] } }
 ```
@@ -107,14 +107,14 @@ sesiones no hace nada. `--background` se desasocia y devuelve al instante: `Sess
 arranque de la sesión hasta que el comando termina. Y un candado impide que varias sesiones abiertas
 lancen syncs simultáneos contra una API que ya limita por ritmo.
 
-`chatstack status` muestra en `last_background_sync` cómo fue el último.
+`stackchat status` muestra en `last_background_sync` cómo fue el último.
 
 ## Usar sin Claude
 
 El binario funciona solo:
 
 ```bash
-CS="node ~/.claude/skills/chatstack/bin/chatstack.cjs"
+CS="node ~/.claude/skills/stackchat/bin/stackchat.cjs"
 
 $CS status
 $CS q overview
@@ -131,7 +131,7 @@ $CS sql "SELECT source, COUNT(*) n FROM subscribers WHERE is_active=1 GROUP BY s
 - **No dice quién lee tus Notes.** Substack no lo expone. Sí dice quién interactúa: like, restack
   o respuesta, con nombre y publicación.
 - **No conecta el email de un suscriptor con su cuenta de Substack.** Quien da like es un usuario
-  de substack.com; el export de suscriptores da emails. No hay clave común: chatstack intenta
+  de substack.com; el export de suscriptores da emails. No hay clave común: stackchat intenta
   casarlos por nombre exacto y lo presenta como pista, nunca como certeza.
 - **No publica ni modifica nada.** Es de solo lectura, de principio a fin.
 - **Usa la API interna del panel de Substack**, la misma que mueven sus botones de «Descargar CSV».
@@ -151,15 +151,15 @@ src/ingest/endpoints.ts  única lista de endpoints de Substack (la usan Node y e
 src/ingest/              descarga por HTTP con la cookie de sesión
 src/load/                detección de CSV por cabeceras y carga idempotente en SQLite
 src/queries.ts           las consultas sobre la base
-src/queryCommand.ts      despacho de `chatstack q <nombre> --flags`
+src/queryCommand.ts      despacho de `stackchat q <nombre> --flags`
 src/mcp/                 servidor MCP opcional, sobre las mismas consultas
-skills/chatstack/        el skill: SKILL.md + bundle + snippets de navegador
+skills/stackchat/        el skill: SKILL.md + bundle + snippets de navegador
 ```
 
-Los snippets de `skills/chatstack/browser/` se **generan** desde `src/ingest/endpoints.ts`
+Los snippets de `skills/stackchat/browser/` se **generan** desde `src/ingest/endpoints.ts`
 (`npm run build:browser`): así no hay dos listas de URLs que se desincronicen. No los edites a mano.
 
-El bundle (`skills/chatstack/bin/chatstack.cjs`) se genera con esbuild y es lo que se instala.
+El bundle (`skills/stackchat/bin/stackchat.cjs`) se genera con esbuild y es lo que se instala.
 Hay un test que lo ejecuta aislado, porque es lo único que detecta fallos de empaquetado.
 
 ### MCP (opcional)
@@ -169,7 +169,7 @@ Las mismas consultas están disponibles como servidor MCP para Claude Desktop:
 ```json
 {
   "mcpServers": {
-    "chatstack": {
+    "stackchat": {
       "command": "node",
       "args": ["<ruta>/dist/cli.js", "mcp"]
     }

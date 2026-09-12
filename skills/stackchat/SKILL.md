@@ -1,5 +1,5 @@
 ---
-name: chatstack
+name: stackchat
 description: >-
   Responde preguntas sobre el Substack del usuario consultando una base de datos
   local con sus suscriptores, posts, crecimiento y Notes: cuántos suscriptores
@@ -13,7 +13,7 @@ description: >-
   ("actualiza", "sincroniza"). Es de solo lectura: no publica ni modifica nada.
 ---
 
-# chatstack
+# stackchat
 
 Tus datos de Substack en una base SQLite local que puedes preguntar en lenguaje natural.
 Todo se queda en la máquina del usuario: no hay servidor, no se envía nada a ningún sitio.
@@ -24,16 +24,16 @@ El binario está junto a este archivo. Defínelo una vez por sesión con la ruta
 directorio del skill (te la dan al cargarlo, como «Base directory for this skill»):
 
 ```bash
-CS="node --no-warnings=ExperimentalWarning <SKILL_DIR>/bin/chatstack.cjs"
+CS="node --no-warnings=ExperimentalWarning <SKILL_DIR>/bin/stackchat.cjs"
 $CS status
 ```
 
-Si alguien pregunta cómo instalar chatstack en otra máquina: `npx skills add sotoplatero/chatstack`.
+Si alguien pregunta cómo instalar stackchat en otra máquina: `npx skills add sotoplatero/stackchat`.
 
 Requiere **Node 22.13 o superior** (usa `node:sqlite`, así no hay que compilar nada).
 Si `node --version` es menor, dilo y para: nada más va a funcionar.
 
-Datos y configuración viven en `~/.chatstack/` (`config.json`, `auth.json`, `chatstack.db`, `raw/`).
+Datos y configuración viven en `~/.stackchat/` (`config.json`, `auth.json`, `stackchat.db`, `raw/`).
 
 ## Si ya está conectado
 
@@ -50,21 +50,21 @@ Dos vías. **Elige tú según lo que haya disponible, no preguntes al usuario cu
 su cookie no se copia a ningún archivo: el navegador ya está autenticado y las peticiones salen
 desde la propia página.
 
-Pregunta el subdominio si no lo sabes (o léelo de `~/.chatstack/config.json`). Luego:
+Pregunta el subdominio si no lo sabes (o léelo de `~/.stackchat/config.json`). Luego:
 
 **1. Estadísticas de la publicación**
 
 - `navigate` a `https://<subdominio>.substack.com/publish/home`
 - `javascript_tool` con el contenido de **`<SKILL_DIR>/browser/01-publication.js`**.
   Devuelve enseguida `{arrancado}`: el trabajo sigue en la página.
-- **Sondea** `window.__chatstack` cada ~15 s hasta que `listo` sea `true` (mira `fase` y `progreso`
+- **Sondea** `window.__stackchat` cada ~15 s hasta que `listo` sea `true` (mira `fase` y `progreso`
   para informar). Tarda hasta un minuto, sobre todo esperando el export de suscriptores.
-- Cuando esté listo, lee `window.__chatstack.datos`, guárdalo con Write en
-  `<carpeta temporal>/chatstack-publication.json` y ejecuta `$CS load <carpeta temporal>`.
+- Cuando esté listo, lee `window.__stackchat.datos`, guárdalo con Write en
+  `<carpeta temporal>/stackchat-publication.json` y ejecuta `$CS load <carpeta temporal>`.
 
 **2. El CSV de suscriptores** (el que trae el engagement individual)
 
-`window.__chatstack.datos.email_list_url` trae un enlace absoluto. No se puede leer con `fetch`
+`window.__stackchat.datos.email_list_url` trae un enlace absoluto. No se puede leer con `fetch`
 —redirige a S3 y CORS lo corta—, así que hay que descargarlo: `navigate` a esa URL. Chrome lo
 guarda en Descargas; muévelo a la carpeta temporal y vuelve a ejecutar `$CS load`.
 
@@ -73,7 +73,7 @@ guarda en Descargas; muévelo a la carpeta temporal y vuelve a ejecutar `$CS loa
 - `navigate` a `https://substack.com`
 - `javascript_tool` con **`<SKILL_DIR>/browser/02-notes.js`**, y sondea igual.
   Con 200+ notas tarda varios minutos: `progreso` va marcando `hechas/total`.
-- Lee `window.__chatstack.datos`, guárdalo como `chatstack-notes.json` en la carpeta temporal y
+- Lee `window.__stackchat.datos`, guárdalo como `stackchat-notes.json` en la carpeta temporal y
   `$CS load <carpeta temporal>`.
 
 Los datos vuelven por el resultado del tool, no por descargas: Chrome bloquea en silencio las
@@ -105,14 +105,14 @@ Para que los datos estén frescos sin pedirlo, un hook de `SessionStart`:
 ```json
 { "hooks": { "SessionStart": [{ "hooks": [{
   "type": "command",
-  "command": "node --no-warnings=ExperimentalWarning \"<SKILL_DIR>/bin/chatstack.cjs\" sync --if-stale 6 --background",
+  "command": "node --no-warnings=ExperimentalWarning \"<SKILL_DIR>/bin/stackchat.cjs\" sync --if-stale 6 --background",
   "async": true
 }] }] } }
 ```
 
 `--if-stale 6` sale en milisegundos si los datos tienen menos de 6 horas, así que en la mayoría de
 sesiones no hace nada. `--background` se desasocia y devuelve al instante, porque `SessionStart`
-bloquea el arranque hasta que el comando acaba. Un candado en `~/.chatstack/sync.lock` evita que
+bloquea el arranque hasta que el comando acaba. Un candado en `~/.stackchat/sync.lock` evita que
 varias sesiones abiertas lancen syncs simultáneos.
 
 El resultado queda en `last_background_sync` de `$CS status`: **míralo antes de responder**. Si dice
@@ -203,6 +203,6 @@ Para «¿quién ha abierto todos mis correos?» compara `Unique emails seen (6mo
 - `connected: false` o «la sesión ha caducado» → volver a conectar (vía A o B).
 - Un `sync` puede acabar `partial`: Substack devuelve 503 y 429 esporádicos. Lo descargado se carga
   igual; repetir más tarde completa el resto.
-- En la vía A, si `window.__chatstack.error` trae algo, cuéntalo tal cual y ofrece la vía B.
+- En la vía A, si `window.__stackchat.error` trae algo, cuéntalo tal cual y ofrece la vía B.
 - Substack cambia sus endpoints internos sin avisar. Si una descarga concreta falla siempre, dilo
   claramente en vez de inventar el dato que falta.

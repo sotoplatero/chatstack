@@ -15,7 +15,7 @@ const _post = async (u, body) => {
 const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Substack ha devuelto el id del export como export_id, id y exportId segun la version.
 const _exportId = (o) => o && (o.export_id || o.id || o.exportId);
-const P = (window.__chatstack = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
+const P = (window.__stackchat = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
 P.paso = 'publication';
 
 (async () => {
@@ -101,7 +101,7 @@ P.paso = 'publication';
     if (!email_list_url) P.avisos.push({ file: 'email_list.csv', motivo: 'el export seguia sin estar listo tras 60s', export_id: exportId });
   }
 
-  P.datos = { kind: 'chatstack-files', fetched_at: new Date().toISOString(), origin: location.origin, files, email_list_url };
+  P.datos = { kind: 'stackchat-files', fetched_at: new Date().toISOString(), origin: location.origin, files, email_list_url };
   P.resumen = {
     incluye: Object.keys(files).map((k) => k + ' (' + files[k].trim().split('\n').length + ' filas)'),
     email_list_url,
@@ -112,4 +112,4 @@ P.paso = 'publication';
  } catch (e) { P.error = String(e).slice(0, 200); P.listo = true; }
 })();
 
-({ arrancado: 'publication', siguiente: 'sondea window.__chatstack hasta listo:true, luego lee window.__chatstack.datos' })
+({ arrancado: 'publication', siguiente: 'sondea window.__stackchat hasta listo:true, luego lee window.__stackchat.datos' })

@@ -8,9 +8,9 @@
  *
  *  1. `javascript_tool` corta a los 45 s y recorrer 200+ notas tarda minutos. Por eso cada snippet
  *     ARRANCA el trabajo y devuelve enseguida: la página sigue sola entre llamadas y Claude sondea
- *     `window.__chatstack` hasta ver `listo`.
+ *     `window.__stackchat` hasta ver `listo`.
  *  2. Chrome bloquea en silencio las descargas automáticas repetidas de un sitio. Por eso no se
- *     descarga nada: el resultado se recoge por `window.__chatstack.datos` y lo escribe Claude.
+ *     descarga nada: el resultado se recoge por `window.__stackchat.datos` y lo escribe Claude.
  *  3. El CSV de suscriptores no se puede leer con fetch: su URL redirige a S3 y CORS lo corta.
  *     Se entrega su enlace para que lo baje quien pueda (el CLI, o el usuario con un clic).
  *
@@ -24,7 +24,7 @@ import {
   PUB, SUBSCRIBER_EXPORT_COLUMNS, SUBSCRIBER_SET_QUERY, DEFAULT_FROM, dateChunks, today,
 } from "../dist/ingest/endpoints.js";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "chatstack", "browser");
+const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "stackchat", "browser");
 mkdirSync(OUT, { recursive: true });
 
 const to = today();
@@ -48,7 +48,7 @@ const _post = async (u, body) => {
 const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Substack ha devuelto el id del export como export_id, id y exportId segun la version.
 const _exportId = (o) => o && (o.export_id || o.id || o.exportId);
-const P = (window.__chatstack = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
+const P = (window.__stackchat = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
 `.trim();
 
 /** Paso 1 — en https://<sub>.substack.com/publish/home. */
@@ -138,7 +138,7 @@ P.paso = 'publication';
     if (!email_list_url) P.avisos.push({ file: 'email_list.csv', motivo: 'el export seguia sin estar listo tras 60s', export_id: exportId });
   }
 
-  P.datos = { kind: 'chatstack-files', fetched_at: new Date().toISOString(), origin: location.origin, files, email_list_url };
+  P.datos = { kind: 'stackchat-files', fetched_at: new Date().toISOString(), origin: location.origin, files, email_list_url };
   P.resumen = {
     incluye: Object.keys(files).map((k) => k + ' (' + files[k].trim().split('\\n').length + ' filas)'),
     email_list_url,
@@ -149,7 +149,7 @@ P.paso = 'publication';
  } catch (e) { P.error = String(e).slice(0, 200); P.listo = true; }
 })();
 
-({ arrancado: 'publication', siguiente: 'sondea window.__chatstack hasta listo:true, luego lee window.__chatstack.datos' })
+({ arrancado: 'publication', siguiente: 'sondea window.__stackchat hasta listo:true, luego lee window.__stackchat.datos' })
 `;
 
 /** Paso 2 — en https://substack.com: Notes y quién interactúa. */
@@ -279,7 +279,7 @@ P.paso = 'notes';
  } catch (e) { P.error = String(e).slice(0, 200); P.listo = true; }
 })();
 
-({ arrancado: 'notes', siguiente: 'sondea window.__chatstack hasta listo:true, luego lee window.__chatstack.datos' })
+({ arrancado: 'notes', siguiente: 'sondea window.__stackchat hasta listo:true, luego lee window.__stackchat.datos' })
 `;
 
 writeFileSync(join(OUT, "01-publication.js"), publication.trimStart(), "utf8");

@@ -5626,8 +5626,8 @@ function loadJsonBundles(db, runId, dir, files, insRaw) {
         rep.rows = data.notes.length;
         insRaw.run(runId, "notes", path, sha, rep.rows);
         rep.result = loadNotes(db, runId, data);
-      } else if (data.kind === "chatstack-files" && data.files && typeof data.files === "object") {
-        const tmp = (0, import_node_fs3.mkdtempSync)((0, import_node_path2.join)((0, import_node_os.tmpdir)(), "chatstack-bundle-"));
+      } else if ((data.kind === "stackchat-files" || data.kind === "chatstack-files") && data.files && typeof data.files === "object") {
+        const tmp = (0, import_node_fs3.mkdtempSync)((0, import_node_path2.join)((0, import_node_os.tmpdir)(), "stackchat-bundle-"));
         const written = [];
         for (const [fileName, content] of Object.entries(data.files)) {
           if (typeof content !== "string") continue;
@@ -5635,7 +5635,7 @@ function loadJsonBundles(db, runId, dir, files, insRaw) {
           (0, import_node_fs3.writeFileSync)(p, content, "utf8");
           written.push(p);
         }
-        insRaw.run(runId, "chatstack-files", path, sha, written.length);
+        insRaw.run(runId, "stackchat-files", path, sha, written.length);
         files.push(...loadCsvPaths(db, runId, written, insRaw));
         continue;
       } else rep.error = "JSON sin `kind` reconocido; no cargado";
@@ -6355,19 +6355,19 @@ init_queries();
 var import_node_os2 = require("node:os");
 var import_node_path5 = require("node:path");
 var import_node_fs6 = require("node:fs");
-function chatstackHome() {
-  return process.env.CHATSTACK_HOME ? (0, import_node_path5.resolve)(process.env.CHATSTACK_HOME) : (0, import_node_path5.join)((0, import_node_os2.homedir)(), ".chatstack");
+function stackchatHome() {
+  return process.env.STACKCHAT_HOME ? (0, import_node_path5.resolve)(process.env.STACKCHAT_HOME) : (0, import_node_path5.join)((0, import_node_os2.homedir)(), ".stackchat");
 }
-var configPath = () => (0, import_node_path5.join)(chatstackHome(), "config.json");
-var authPath = () => (0, import_node_path5.join)(chatstackHome(), "auth.json");
-var rawDir = () => (0, import_node_path5.join)(chatstackHome(), "raw");
+var configPath = () => (0, import_node_path5.join)(stackchatHome(), "config.json");
+var authPath = () => (0, import_node_path5.join)(stackchatHome(), "auth.json");
+var rawDir = () => (0, import_node_path5.join)(stackchatHome(), "raw");
 function dbPath(override) {
-  const v = override ?? process.env.CHATSTACK_DB ?? process.env.CONSTACK_DB;
+  const v = override ?? process.env.STACKCHAT_DB ?? process.env.CONSTACK_DB;
   if (v === ":memory:") return v;
-  return v ? (0, import_node_path5.resolve)(v) : (0, import_node_path5.join)(chatstackHome(), "chatstack.db");
+  return v ? (0, import_node_path5.resolve)(v) : (0, import_node_path5.join)(stackchatHome(), "stackchat.db");
 }
 function ensureHome() {
-  const dir = chatstackHome();
+  const dir = stackchatHome();
   (0, import_node_fs6.mkdirSync)(dir, { recursive: true });
   return dir;
 }
@@ -6387,7 +6387,7 @@ function saveConfig(c) {
   return c;
 }
 function resolveSubdomain(explicit) {
-  return explicit ?? loadConfig()?.subdomain ?? process.env.CHATSTACK_SUB ?? process.env.CONSTACK_SUB ?? null;
+  return explicit ?? loadConfig()?.subdomain ?? process.env.STACKCHAT_SUB ?? process.env.CONSTACK_SUB ?? null;
 }
 
 // src/connect.ts
@@ -6455,8 +6455,8 @@ async function connect(cookie, opts = {}) {
 var import_node_fs7 = require("node:fs");
 var import_node_path6 = require("node:path");
 var import_node_child_process = require("node:child_process");
-var lockPath = () => (0, import_node_path6.join)(chatstackHome(), "sync.lock");
-var logPath = () => (0, import_node_path6.join)(chatstackHome(), "last-sync.log");
+var lockPath = () => (0, import_node_path6.join)(stackchatHome(), "sync.lock");
+var logPath = () => (0, import_node_path6.join)(stackchatHome(), "last-sync.log");
 var LOCK_TTL_MS = 15 * 60 * 1e3;
 function hoursSinceLastSync(db, now = Date.now()) {
   const row = db.prepare("SELECT finished_at FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").get();
@@ -6523,33 +6523,33 @@ function relaunchDetached(argv, execPath = process.execPath) {
 }
 
 // src/cli.ts
-var HELP = `chatstack \u2014 tus datos de Substack en una base local que puedes consultar
+var HELP = `stackchat \u2014 tus datos de Substack en una base local que puedes consultar
 
 Uso:
-  chatstack connect --cookies <archivo.curl> [--sub <subdominio>]
-                  Verifica tu sesi\xF3n, detecta tu publicaci\xF3n y lo guarda en ~/.chatstack.
+  stackchat connect --cookies <archivo.curl> [--sub <subdominio>]
+                  Verifica tu sesi\xF3n, detecta tu publicaci\xF3n y lo guarda en ~/.stackchat.
                   El archivo sale de Chrome: en el panel de Substack, F12 \u2192 Network \u2192
                   recargar \u2192 clic derecho en la primera petici\xF3n \u2192 Copy as cURL (bash).
-  chatstack status
+  stackchat status
                   Dice si hay sesi\xF3n, a qu\xE9 publicaci\xF3n apunta y cu\xE1ndo fue el \xFAltimo sync.
-  chatstack sync  [--full] [--if-stale <horas>] [--background] [--sub <subdominio>]
+  stackchat sync  [--full] [--if-stale <horas>] [--background] [--sub <subdominio>]
                   Descarga tus datos de Substack y los carga en la base. Por defecto es
                   incremental: solo pide las interacciones de las notas cuyos contadores
                   han cambiado, y acorta el rango de las series (~10 s sin novedades,
                   frente a 3-4 min de un sync completo). --full lo fuerza todo.
                   --if-stale N no hace nada si el \xFAltimo sync es m\xE1s reciente que N horas.
                   --background se desasocia y devuelve al instante (para hooks).
-  chatstack load  <carpeta>
+  stackchat load  <carpeta>
                   Carga CSV/ZIP/notes.json ya descargados (lo usa la v\xEDa del navegador).
-  chatstack q <consulta> [--flags]
+  stackchat q <consulta> [--flags]
                   Consulta la base y escribe JSON en stdout. Consultas:
 ${helpText()}
 
-  chatstack sql "<SELECT ...>" [--max-rows N]
+  stackchat sql "<SELECT ...>" [--max-rows N]
                   SELECT de solo lectura sobre la base (LIMIT 200 por defecto).
 
-Todo vive en ~/.chatstack (config.json, auth.json, chatstack.db, raw/).
-Variables: CHATSTACK_HOME, CHATSTACK_DB, CHATSTACK_SUB.
+Todo vive en ~/.stackchat (config.json, auth.json, stackchat.db, raw/).
+Variables: STACKCHAT_HOME, STACKCHAT_DB, STACKCHAT_SUB.
 `;
 async function main() {
   for (const s of [process.stdout, process.stderr]) {
@@ -6566,9 +6566,9 @@ async function main() {
     const flags = parseFlags(argv.slice(2));
     const db = openDb(dbPath(typeof flags.db === "string" ? flags.db : void 0));
     if (!name) {
-      log(cmd === "q" ? `Falta la consulta: chatstack q <consulta>
+      log(cmd === "q" ? `Falta la consulta: stackchat q <consulta>
 
-${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
+${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
       process.exit(2);
     }
     const result = cmd === "q" ? runQuery(db, name, flags) : querySql(db, name, typeof flags["max-rows"] === "string" ? Number(flags["max-rows"]) : 200);
@@ -6597,7 +6597,7 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
     case "connect": {
       if (!values.cookies) {
         log(
-          "Falta el archivo: chatstack connect --cookies <archivo.curl>\n\nS\xE1calo de Chrome: abre el panel de tu Substack, F12 \u2192 pesta\xF1a Network \u2192 recarga con\nCtrl+R \u2192 clic derecho en la primera petici\xF3n \u2192 Copy \u2192 Copy as cURL (bash) \u2192 p\xE9galo\nen un archivo de texto y pasa su ruta aqu\xED."
+          "Falta el archivo: stackchat connect --cookies <archivo.curl>\n\nS\xE1calo de Chrome: abre el panel de tu Substack, F12 \u2192 pesta\xF1a Network \u2192 recarga con\nCtrl+R \u2192 clic derecho en la primera petici\xF3n \u2192 Copy \u2192 Copy as cURL (bash) \u2192 p\xE9galo\nen un archivo de texto y pasa su ruta aqu\xED."
         );
         process.exit(2);
       }
@@ -6612,9 +6612,9 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
       log(
         `Conectado como ${r.identity.handle ?? r.identity.user_id} \u2192 ${r.config.subdomain}${r.config.publication_name ? ` (${r.config.publication_name})` : ""}`
       );
-      log(`Guardado en ${chatstackHome()}`);
+      log(`Guardado en ${stackchatHome()}`);
       log(`Borra ${curlFile} cuando termines: contiene tu sesi\xF3n.`);
-      log("Ahora: chatstack sync");
+      log("Ahora: stackchat sync");
       return;
     }
     case "status": {
@@ -6625,7 +6625,7 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
       process.stdout.write(
         JSON.stringify(
           {
-            home: chatstackHome(),
+            home: stackchatHome(),
             connected: !!auth,
             subdomain: config?.subdomain ?? null,
             publication_name: config?.publication_name ?? null,
@@ -6648,7 +6648,7 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
     case "load": {
       const dir = positionals[1];
       if (!dir) {
-        log("Falta la carpeta: chatstack load <carpeta>");
+        log("Falta la carpeta: stackchat load <carpeta>");
         process.exit(2);
       }
       printReport(loadDirectory(openDb(dbFile), (0, import_node_path7.resolve)(dir)), log);
@@ -6658,7 +6658,7 @@ ${helpText()}` : 'Falta la consulta: chatstack sql "SELECT ..."');
       const sub = resolveSubdomain(values.sub);
       const auth = loadAuth(authPath());
       if (!sub || !auth) {
-        log("No hay sesi\xF3n guardada. Ejecuta primero:\n  chatstack connect --cookies <archivo.curl>");
+        log("No hay sesi\xF3n guardada. Ejecuta primero:\n  stackchat connect --cookies <archivo.curl>");
         process.exit(2);
       }
       const db = openDb(dbFile);
@@ -6710,7 +6710,7 @@ async function runSync(o) {
     seriesFrom: o.full ? void 0 : new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10)
   });
   if (ingest.sessionExpired) {
-    o.log("La sesi\xF3n de Substack ha caducado. Repite `chatstack connect` con un cURL nuevo.");
+    o.log("La sesi\xF3n de Substack ha caducado. Repite `stackchat connect` con un cURL nuevo.");
     writeSyncLog("fall\xF3: la sesi\xF3n de Substack ha caducado");
     return 2;
   }

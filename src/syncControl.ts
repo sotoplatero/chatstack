@@ -2,15 +2,15 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync } f
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import type { Db } from "./db/index.js";
-import { chatstackHome, ensureHome } from "./paths.js";
+import { stackchatHome, ensureHome } from "./paths.js";
 
 /**
  * Guardias del sync automático: frescura, candado y desasociación. Están aparte del sync porque
  * son decisiones de *cuándo* ejecutarlo, no de *cómo*, y así se prueban sin tocar la red.
  */
 
-export const lockPath = () => join(chatstackHome(), "sync.lock");
-export const logPath = () => join(chatstackHome(), "last-sync.log");
+export const lockPath = () => join(stackchatHome(), "sync.lock");
+export const logPath = () => join(stackchatHome(), "last-sync.log");
 
 /** Un sync colgado no debe bloquear los siguientes para siempre. */
 export const LOCK_TTL_MS = 15 * 60 * 1000;

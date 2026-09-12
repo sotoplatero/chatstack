@@ -15,7 +15,7 @@ const _post = async (u, body) => {
 const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Substack ha devuelto el id del export como export_id, id y exportId segun la version.
 const _exportId = (o) => o && (o.export_id || o.id || o.exportId);
-const P = (window.__chatstack = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
+const P = (window.__stackchat = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
 P.paso = 'notes';
 
 (async () => {
@@ -141,4 +141,4 @@ P.paso = 'notes';
  } catch (e) { P.error = String(e).slice(0, 200); P.listo = true; }
 })();
 
-({ arrancado: 'notes', siguiente: 'sondea window.__chatstack hasta listo:true, luego lee window.__chatstack.datos' })
+({ arrancado: 'notes', siguiente: 'sondea window.__stackchat hasta listo:true, luego lee window.__stackchat.datos' })

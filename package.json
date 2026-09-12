@@ -1,5 +1,5 @@
 {
-  "name": "chatstack",
+  "name": "stackchat",
   "version": "0.1.0",
   "description": "Tus datos de Substack en una base local que puedes preguntar en lenguaje natural",
   "main": "index.js",
@@ -20,7 +20,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "chatstack": "./skills/chatstack/bin/chatstack.cjs"
+    "stackchat": "./skills/stackchat/bin/stackchat.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

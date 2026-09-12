@@ -68,9 +68,9 @@ Guardias para que un hook global sea tolerable, en `src/syncControl.ts`:
 - `--background`: el CLI se relanza desasociado y devuelve al instante. Lo hace el CLI y no el shell
   porque `SessionStart` bloquea el arranque de la sesión hasta que el comando acaba, y así el hook
   es idéntico en Windows, macOS y Linux.
-- Candado en `~/.chatstack/sync.lock` (pid + hora, caduca a los 15 min): tres sesiones abiertas
+- Candado en `~/.stackchat/sync.lock` (pid + hora, caduca a los 15 min): tres sesiones abiertas
   lanzarían tres syncs contra una API que ya responde 429.
-- `~/.chatstack/last-sync.log`, que `status` expone en `last_background_sync`: si el sync de fondo
+- `~/.stackchat/last-sync.log`, que `status` expone en `last_background_sync`: si el sync de fondo
   falló por sesión caducada, el modelo lo ve al consultar en vez de dar datos viejos en silencio.
 
 Se descartó usar un subagente: el sync es un comando determinista, así que un agente añadiría
@@ -80,13 +80,13 @@ latencia y tokens sin aportar decisiones. El aviso de fallo lo cubre el registro
 
 Objetivo: que cualquiera lo instale, no solo el autor. Tres cambios:
 
-- **Los datos salen del repo** a `~/.chatstack/` (`config.json`, `auth.json`, `chatstack.db`,
-  `raw/`), resuelto con `os.homedir()`. `CHATSTACK_HOME` lo redirige en los tests.
-- **`chatstack connect`** verifica la sesión contra `/api/v1/user/profile/self` y detecta la
+- **Los datos salen del repo** a `~/.stackchat/` (`config.json`, `auth.json`, `stackchat.db`,
+  `raw/`), resuelto con `os.homedir()`. `STACKCHAT_HOME` lo redirige en los tests.
+- **`stackchat connect`** verifica la sesión contra `/api/v1/user/profile/self` y detecta la
   publicación ANTES de escribir nada: un cURL caducado falla en dos segundos, no a mitad de una
   descarga de cuatro minutos. Con varias publicaciones las lista y no elige por su cuenta.
 - **El skill es autocontenido**: esbuild mete el CLI en un solo `.cjs` (242 KB) dentro de
-  `skills/chatstack/bin/`. Instalar = copiar la carpeta. CJS y no ESM porque `adm-zip` usa
+  `skills/stackchat/bin/`. Instalar = copiar la carpeta. CJS y no ESM porque `adm-zip` usa
   `require` dinámico; extensión `.cjs` explícita para no depender del `package.json` de al lado.
   El SDK de MCP queda fuera del bundle: `src/cli.ts` lo carga con import dinámico.
 
@@ -100,10 +100,10 @@ desde la página. Comprobado contra Chrome real, en este orden:
    estadísticas se piden desde el subdominio y las Notes desde `substack.com`.
 3. **Chrome bloquea en silencio las descargas automáticas repetidas** de un sitio, y la decisión
    persiste. El primer diseño bajaba 6 CSV y no llegó ninguno. Ahora no se descarga nada: el
-   resultado vuelve por `window.__chatstack.datos` y lo escribe Claude (~100-150 KB).
+   resultado vuelve por `window.__stackchat.datos` y lo escribe Claude (~100-150 KB).
 4. **`javascript_tool` corta a los 45 s** y recorrer 200+ notas tarda minutos. Por eso los snippets
    ARRANCAN el trabajo y devuelven enseguida; la página sigue sola y Claude sondea
-   `window.__chatstack` hasta `listo`.
+   `window.__stackchat` hasta `listo`.
 
 Excepción que no se pudo salvar: el CSV de suscriptores redirige a S3, así que `fetch` no puede
 leerlo. Se entrega su URL y se descarga navegando a ella.
@@ -125,12 +125,12 @@ resultado del tool). La del cURL gasta cero contexto y puede correr desatendida.
 recomienda conectar con cURL a quien vaya a sincronizar a menudo, aunque tenga la extensión.
 
 ## De MCP a skill (decisión 2026-09-10)
-El consumo principal pasa a ser el skill `chatstack`, no el servidor MCP: las 12 tools del MCP
+El consumo principal pasa a ser el skill `stackchat`, no el servidor MCP: las 12 tools del MCP
 ocupaban contexto en todas las sesiones, también las que no van de Substack, mientras que un skill
 se carga solo al invocarse. Las consultas se extraen a `src/queries.ts` (ya no son código del MCP)
 y se exponen por CLI en `src/queryCommand.ts` como `constack q <nombre> --flags` más `constack sql`.
 El servidor MCP se conserva para Claude Desktop pero se desregistra de Claude Code.
-La fuente del skill vive en `skills/chatstack/` y se enlaza a `~/.claude/skills/chatstack` con un
+La fuente del skill vive en `skills/stackchat/` y se enlaza a `~/.claude/skills/stackchat` con un
 junction de Windows (no requiere admin y refleja las ediciones del repo sin recopiar).
 
 `q` y `sql` no pasan por `parseArgs`: sus flags son abiertas y `parseArgs` aborta ante opciones no
