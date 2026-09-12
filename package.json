@@ -13,7 +13,8 @@
     "dev": "tsx src/cli.ts",
     "mcp": "node --no-warnings=ExperimentalWarning dist/cli.js mcp",
     "build:browser": "node scripts/build-browser.mjs",
-    "build:skill": "node scripts/build-skill.mjs"
+    "build:skill": "node scripts/build-skill.mjs",
+    "zip": "node scripts/build-zip.mjs"
   },
   "keywords": [],
   "author": "",

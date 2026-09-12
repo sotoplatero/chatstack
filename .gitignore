@@ -16,3 +16,6 @@ substack-auth.json
 
 # Borradores y notas personales: no pertenecen a este repo.
 Claude outputs/
+
+# El zip se genera con `npm run zip`.
+stackchat-skill.zip
