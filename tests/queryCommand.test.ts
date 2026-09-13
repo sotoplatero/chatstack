@@ -34,7 +34,7 @@ describe("runQuery", () => {
   it("cada consulta declarada se ejecuta y devuelve algo serializable", () => {
     for (const name of QUERY_NAMES) {
       // Las que exigen un argumento se prueban aparte; aquí van las que corren sin flags.
-      if (name === "subscriber" || name === "note") continue;
+      if (name === "subscriber" || name === "note" || name === "post") continue;
       const out = runQuery(db, name, {});
       expect(out, name).toBeDefined();
       expect(() => JSON.stringify(out), name).not.toThrow();
@@ -68,7 +68,9 @@ describe("runQuery", () => {
   });
 
   it("rechaza valores fuera de la lista cerrada y enteros mal formados", () => {
-    expect(() => runQuery(db, "posts", { sort: "opens" })).toThrow(/debe ser uno de/);
+    // `opens` sí es una ordenación válida desde que el CSV trae las columnas de correo; el valor
+    // inventado tiene que ser uno que de verdad no exista.
+    expect(() => runQuery(db, "posts", { sort: "aperturas" })).toThrow(/debe ser uno de/);
     expect(() => runQuery(db, "notes", { sort: "likes" })).toThrow(/debe ser uno de/);
     expect(() => runQuery(db, "candidates", { limit: "muchos" })).toThrow(/entero/);
     expect(() => runQuery(db, "subscribers", { plan: true })).toThrow(/necesita un valor/);

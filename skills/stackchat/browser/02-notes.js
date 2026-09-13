@@ -1,29 +1,91 @@
 // Generado por scripts/build-browser.mjs — no editar a mano.
+//
+// Salida de datos (unica version verdadera): el resultado de javascript_tool se trunca a ~1 KB.
+// El JSON NO sale por el valor de retorno ni troceado con slice(): sale por UNA descarga,
+// P.descargar(). Chrome solo bloquea las descargas automaticas REPETIDAS; una por snippet pasa.
+
+const DESDE = "2024-01-01";
+// La fecha final se calcula AQUI, al ejecutar. Si se calculara al compilar el snippet, quien lo
+// ejecutara meses despues recibiria las series cortadas el dia del build.
+const HOY = new Date().toISOString().slice(0, 10);
+const U = (t, off) => String(t)
+  .split('__FROM__').join(DESDE)
+  .split('__TO__').join(HOY)
+  .split('__OFF__').join(String(off == null ? 0 : off));
+
+const P = (window.__stackchat = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
+// Todo tramo, pagina o archivo que se acabe saltando queda aqui para que el agente lo lea.
+const _aviso = (o) => { P.avisos.push(o); return null; };
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const PAUSA = 150;   // respiro entre peticiones: encadenarlas sin pausa provoca 429
+const INTENTOS = 4;  // mismos reintentos que src/ingest/substack.ts
+// Reintenta ante 429 y 5xx respetando Retry-After, y ante errores de red. Devuelve la Response o
+// un objeto { __err } que el llamante convierte en aviso; nunca lanza.
+const _req = async (u, init) => {
+  let ultimo = { __err: 'sin respuesta', __url: u };
+  for (let i = 0; i < INTENTOS; i++) {
+    if (PAUSA) await _sleep(PAUSA);
+    let r;
+    try { r = await fetch(u, init); }
+    catch (e) {
+      ultimo = { __err: 'red', __detalle: String(e).slice(0, 120), __url: u };
+      await _sleep(800 * (i + 1));
+      continue;
+    }
+    if (r.ok) return r;
+    ultimo = { __err: r.status, __url: u };
+    // 401/403 es sesion caducada: reintentar no arregla nada.
+    if (r.status === 401 || r.status === 403) { ultimo.__sesion = true; break; }
+    if (r.status !== 429 && r.status < 500) break;
+    // Defensivo a propósito: esto corre en la pestaña del usuario y cualquier excepción aquí
+    // abortaría la descarga entera por un detalle de cabeceras.
+    const ra = Number(r.headers && r.headers.get ? r.headers.get('retry-after') : 0) * 1000;
+    await _sleep(Math.max(ra || 0, 800 * Math.pow(2, i)));
+  }
+  return ultimo;
+};
 const _get = async (u, asText) => {
-  const r = await fetch(u, { credentials: 'include' });
-  if (!r.ok) return { __err: r.status, __url: u };
+  const r = await _req(u, { credentials: 'include' });
+  if (r.__err !== undefined) return r;
   return asText ? r.text() : r.json();
 };
 const _post = async (u, body) => {
-  const r = await fetch(u, {
+  const r = await _req(u, {
     method: 'POST', credentials: 'include',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return r.ok ? r.json() : { __err: r.status, __url: u };
+  return r.__err !== undefined ? r : r.json();
 };
-const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Celda CSV: la comparten posts y suscriptores, por eso vive en el nivel superior.
-const cell = (v) => /[",\n\r]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v == null ? '' : v);
+const _fallo = (x) => !x || x.__err !== undefined;
+
+// Mismo CSV que rowsToCsv() de src/ingest/endpoints.ts: el navegador y la ingesta por Node deben
+// producir archivos identicos para que los cargue exactamente el mismo codigo.
+const cell = (v) => {
+  const s = (v === null || v === undefined) ? '' : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+const csvDe = (head, rows) => [head, ...rows].map((r) => r.map(cell).join(',')).join('\n') + '\n';
+const txt = (v) => (v === null || v === undefined) ? '' : String(v);
+const num = (v) => Number(v) || 0;
+
 // Substack ha devuelto el id del export como export_id, id y exportId segun la version.
 const _exportId = (o) => o && (o.export_id || o.id || o.exportId);
-const P = (window.__stackchat = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
+// Salida unica: una descarga por snippet.
+const _descargar = (nombre) => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([P.json], { type: 'application/json' }));
+  a.download = nombre;
+  document.body.appendChild(a); a.click(); a.remove();
+  return 'descarga lanzada: ' + a.download;
+};
 P.paso = 'notes';
 
 (async () => {
  try {
   const me = await _get('/api/v1/user/profile/self');
-  const UID = me && me.id;
+  const UID = !_fallo(me) && me.id;
   if (!UID) throw new Error('no hay sesion en substack.com');
 
   // 1. Todas las notas propias del feed del perfil (se descartan posts y restacks ajenos).
@@ -32,7 +94,7 @@ P.paso = 'notes';
   let cursor = '';
   for (let page = 0; page < 200; page++) {
     const p = await _get('/api/v1/reader/feed/profile/' + UID + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
-    if (!p || p.__err) break;
+    if (_fallo(p)) { _aviso({ paso: 'feed', motivo: 'pagina saltada', page: page, http: p && p.__err }); break; }
     for (const it of (p.items || [])) {
       if (it.type === 'comment' && it.comment && Number(it.comment.user_id) === Number(UID)) notas.push(it.comment);
     }
@@ -61,7 +123,7 @@ P.paso = 'notes';
   });
   // note_stats en crudo son ~12 KB por nota (series temporales). Solo se guardan las cifras.
   const cifras = (st) => {
-    if (!st || !Array.isArray(st.cards)) return null;
+    if (_fallo(st) || !Array.isArray(st.cards)) return null;
     const out = {};
     for (const c of st.cards) {
       const k = c.cardId || 'card';
@@ -80,7 +142,7 @@ P.paso = 'notes';
   for (const c of notas) {
     const id = Number(c.id);
     const rec = {
-      id, user_id: Number(UID), date: c.date || null, body: c.body || null,
+      id: id, user_id: Number(UID), date: c.date || null, body: c.body || null,
       reaction_count: Number(c.reaction_count || 0), restacks: Number(c.restacks || 0),
       children_count: Number(c.children_count || 0),
       attachments: Array.isArray(c.attachments) ? c.attachments.map(slim) : [],
@@ -89,18 +151,18 @@ P.paso = 'notes';
     if (rec.reaction_count > 0) {
       const rs = await _get('/api/v1/comment/' + id + '/reactors');
       if (Array.isArray(rs)) rec.reactors = rs.map(actor);
-      else bundle.errors.push({ note_id: id, step: 'reactors', error: String(rs && rs.__err) });
+      else { bundle.errors.push({ note_id: id, step: 'reactors', error: String(rs && rs.__err) }); _aviso({ paso: 'reactors', note_id: id, http: rs && rs.__err }); }
     }
     if (rec.restacks > 0) {
       const rs = await _get('/api/v1/comment/' + id + '/restackers');
       if (Array.isArray(rs)) rec.restackers = rs.map(actor).filter((a) => a.id !== Number(UID));
-      else bundle.errors.push({ note_id: id, step: 'restackers', error: String(rs && rs.__err) });
+      else { bundle.errors.push({ note_id: id, step: 'restackers', error: String(rs && rs.__err) }); _aviso({ paso: 'restackers', note_id: id, http: rs && rs.__err }); }
     }
     if (rec.children_count > 0) {
       let rc = '';
       for (let i = 0; i < 50; i++) {
         const p = await _get('/api/v1/reader/comment/' + id + '/replies' + (rc ? '?cursor=' + encodeURIComponent(rc) : ''));
-        if (!p || p.__err) { bundle.errors.push({ note_id: id, step: 'replies', error: String(p && p.__err) }); break; }
+        if (_fallo(p)) { bundle.errors.push({ note_id: id, step: 'replies', error: String(p && p.__err) }); _aviso({ paso: 'replies', note_id: id, http: p && p.__err }); break; }
         for (const br of (p.commentBranches || [])) {
           // Los descendientes vienen envueltos en { comment, type }.
           const all = [br.comment].concat((br.descendantComments || []).map((d) => d.comment || d)).filter(Boolean);
@@ -127,22 +189,23 @@ P.paso = 'notes';
     P.progreso = (++hechas) + '/' + notas.length;
   }
   bundle.notes.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  bundle.avisos = P.avisos;
 
   P.datos = bundle;
-  P.json = JSON.stringify(bundle); P.jsonLength = P.json.length;
-  P.descargar = (nombre) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([P.json], { type: 'application/json' })); a.download = nombre || 'stackchat-notes.json'; document.body.appendChild(a); a.click(); a.remove(); return 'descarga lanzada: ' + a.download; };
+  P.json = JSON.stringify(bundle);
+  P.descargar = (nombre) => _descargar(nombre || 'stackchat-notes.json');
   P.resumen = {
     notas: bundle.notes.length,
     likes: bundle.notes.reduce((n, x) => n + x.reactors.length, 0),
     restacks: bundle.notes.reduce((n, x) => n + x.restackers.length, 0),
     respuestas: bundle.notes.reduce((n, x) => n + x.replies.length, 0),
     con_stats: bundle.notes.filter((x) => x.stats).length,
-    errores: bundle.errors.length,
-    kb: Math.round(JSON.stringify(bundle).length / 1024),
+    avisos: P.avisos.length,
+    kb: Math.round(P.json.length / 1024),
   };
   P.fase = 'terminado';
   P.listo = true;
  } catch (e) { P.error = String(e).slice(0, 200); P.listo = true; }
 })();
 
-({ arrancado: 'notes', siguiente: 'sondea window.__stackchat hasta listo:true, luego lee window.__stackchat.datos' })
+({ arrancado: 'notes', siguiente: 'sondea window.__stackchat hasta listo:true, luego P.descargar()' })

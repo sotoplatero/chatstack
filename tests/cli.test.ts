@@ -60,7 +60,7 @@ describe("CLI", () => {
   });
 
   it("un valor fuera de la lista cerrada falla con código 2", () => {
-    const r = run("q", "posts", "--sort", "opens", "--db", ":memory:");
+    const r = run("q", "posts", "--sort", "aperturas", "--db", ":memory:");
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/debe ser uno de/);
   });
@@ -127,7 +127,10 @@ describe("bundle del skill", () => {
       // puede salir por ahí. `descargar()` existe, pero el snippet nunca la invoca por su cuenta.
       expect(snippet.match(/a\.click\(\)/g)?.length).toBe(1);
       expect(snippet).toContain("P.descargar = ");
-      expect(snippet).not.toMatch(/(?<!P\.)descargar\(\)|P\.descargar\(/);
+      // Se mira el código sin comentarios ni literales de texto: ambos nombran `P.descargar()`
+      // para decirle al agente cuándo llamarla, y eso no es una invocación.
+      const codigo = snippet.replace(/^\s*\/\/.*$/gm, "").replace(/'[^'\n]*'/g, "''");
+      expect(codigo).not.toMatch(/(?<!P\.)descargar\(\)|P\.descargar\(/);
       // Todo error queda dentro del objeto de progreso, no revienta la página.
       expect(snippet).toContain("P.error =");
     }

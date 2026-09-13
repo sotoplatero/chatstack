@@ -2373,9 +2373,9 @@ var require_adm_zip = __commonJS({
           }
           zipPath = zipPath ? fixPath(zipPath) : "";
           if (namefix === "latin1") {
-            namefix = (str2) => str2.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7E]/g, "");
+            namefix = (str3) => str3.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7E]/g, "");
           }
-          if (typeof namefix !== "function") namefix = (str2) => str2;
+          if (typeof namefix !== "function") namefix = (str3) => str3;
           const relPathFix = (entry) => pth.join(zipPath, namefix(relativePath(localPath, entry)));
           const fileNameFix = (entry) => pth.win32.basename(pth.win32.normalize(namefix(entry)));
           filetools.fs.open(localPath, "r", function(err) {
@@ -2762,6 +2762,19 @@ var require_adm_zip = __commonJS({
 });
 
 // src/queries.ts
+function dateRange(col3, from, to) {
+  const parts = [];
+  const args = [];
+  if (from) {
+    parts.push(`${col3} >= ?`);
+    args.push(from);
+  }
+  if (to) {
+    parts.push(`${col3} < date(?, '+1 day')`);
+    args.push(to);
+  }
+  return { sql: parts.length ? parts.join(" AND ") : "1=1", args };
+}
 function getOverview(db) {
   const lastRun = db.prepare("SELECT id, started_at, finished_at, status FROM sync_runs WHERE status <> 'running' ORDER BY id DESC LIMIT 1").get();
   const totals = db.prepare(
@@ -2769,7 +2782,8 @@ function getOverview(db) {
         COUNT(*) AS total,
         SUM(is_active) AS active,
         SUM(CASE WHEN is_active = 1 AND plan = 'free' THEN 1 ELSE 0 END) AS active_free,
-        SUM(CASE WHEN is_active = 1 AND plan <> 'free' THEN 1 ELSE 0 END) AS active_paid,
+        SUM(CASE WHEN is_active = 1 AND ${PAID_SQL} THEN 1 ELSE 0 END) AS active_paid,
+        SUM(CASE WHEN is_active = 1 AND ${OTHER_SQL} THEN 1 ELSE 0 END) AS active_other,
         SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive
       FROM subscribers`
   ).get();
@@ -2778,10 +2792,15 @@ function getOverview(db) {
     `SELECT COUNT(*) AS new_subscribers FROM subscribers
          WHERE subscribed_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)`
   ).get(`-${days} days`);
-  const growth = (days) => db.prepare(
-    `SELECT COALESCE(SUM(new_free),0) AS new_free, COALESCE(SUM(unsubscribes),0) AS unsubscribes,
-                COALESCE(SUM(new_paid),0) AS new_paid, COALESCE(SUM(cancellations_finalized),0) AS cancellations
+  const growthDaily = (days) => db.prepare(
+    `SELECT COUNT(*) AS days_with_data, SUM(new_free) AS new_free_daily, SUM(unsubscribes) AS unsubscribes_daily,
+                SUM(new_paid) AS new_paid_daily, SUM(cancellations_finalized) AS cancellations_daily
          FROM subscriber_growth_daily WHERE date >= date('now', ?)`
+  ).get(`-${days} days`);
+  const growthSources = (days) => db.prepare(
+    `SELECT COUNT(*) AS rows_with_data, SUM(new_subscribers) AS new_subscribers_attributed,
+                SUM(unique_visitors) AS unique_visitors
+         FROM growth_sources WHERE date >= date('now', ?)`
   ).get(`-${days} days`);
   const posts = db.prepare("SELECT COUNT(*) AS total, SUM(is_published) AS published FROM posts").get();
   const totalsSeries = db.prepare("SELECT date, total_subscribers FROM subscriber_totals ORDER BY date DESC LIMIT 1").get() ?? null;
@@ -2790,8 +2809,10 @@ function getOverview(db) {
     last_sync: lastRun ?? null,
     subscribers: totals,
     active_by_plan: byPlan,
+    // Tres formas distintas de contar «altas», con el origen en el nombre para que nadie las sume.
     new_subscribers_from_list: { last_30d: window(30), last_90d: window(90) },
-    growth_daily_totals: { last_30d: growth(30), last_90d: growth(90) },
+    new_from_growth_daily_series: { last_30d: growthDaily(30), last_90d: growthDaily(90) },
+    new_from_growth_sources: { last_30d: growthSources(30), last_90d: growthSources(90) },
     posts
   };
 }
@@ -2799,7 +2820,8 @@ function listSubscribers(db, f) {
   const where = [];
   const args = [];
   if (f.plan) {
-    if (f.plan === "paid") where.push("plan <> 'free'");
+    if (f.plan === "paid") where.push(PAID_SQL);
+    else if (f.plan === "other") where.push(OTHER_SQL);
     else {
       where.push("plan = ?");
       args.push(f.plan);
@@ -2809,13 +2831,10 @@ function listSubscribers(db, f) {
     where.push("is_active = ?");
     args.push(f.is_active ? 1 : 0);
   }
-  if (f.subscribed_after) {
-    where.push("subscribed_at >= ?");
-    args.push(f.subscribed_after);
-  }
-  if (f.subscribed_before) {
-    where.push("subscribed_at < ?");
-    args.push(f.subscribed_before);
+  if (f.subscribed_after || f.subscribed_before) {
+    const r = dateRange("subscribed_at", f.subscribed_after, f.subscribed_before);
+    where.push(r.sql);
+    args.push(...r.args);
   }
   if (f.email_contains) {
     where.push("email LIKE ?");
@@ -2842,59 +2861,92 @@ function getSubscriber(db, email) {
   return { ...withExtra(sub), history };
 }
 function findUpgradeCandidates(db, limit = 50, minDaysSubscribed = 14) {
+  const score = `${CANDIDATE_SIGNALS.map((s) => s.term).join(" + ")} - ${STALENESS_PENALTY}`;
+  const cols = CANDIDATE_SIGNALS.map((s) => `${s.expr} AS ${s.key}`).join(",\n              ");
   const rows = db.prepare(
     `SELECT email, subscribed_at, plan_since, source, extra,
               CAST(julianday('now') - julianday(subscribed_at) AS INTEGER) AS days_subscribed,
-              json_extract(extra, '$.activity') AS activity,
-              json_extract(extra, '$.emails_opened_30d') AS emails_opened_30d,
-              json_extract(extra, '$.days_active_30d') AS days_active_30d,
-              json_extract(extra, '$.post_views_30d') AS post_views_30d
+              ${cols},
+              ${RECEIVED_6MO} AS emails_received_6mo,
+              ${SEEN_6MO} AS unique_emails_seen_6mo,
+              json_extract(extra, '$.last_email_open') AS last_email_open,
+              CAST(julianday('now') - julianday(json_extract(extra, '$.last_email_open')) AS INTEGER) AS days_since_last_open,
+              ROUND(${score}, 3) AS score,
+              ROUND(${STALENESS_PENALTY}, 3) AS staleness_penalty
        FROM subscribers
        WHERE is_active = 1 AND plan = 'free' AND subscribed_at IS NOT NULL
          AND julianday('now') - julianday(subscribed_at) >= ?
-       ORDER BY
-         COALESCE(json_extract(extra, '$.activity'), -1) DESC,
-         COALESCE(json_extract(extra, '$.emails_opened_30d'), -1) DESC,
-         COALESCE(json_extract(extra, '$.days_active_30d'), -1) DESC,
-         subscribed_at ASC
+       ORDER BY score DESC, subscribed_at ASC
        LIMIT ?`
   ).all(minDaysSubscribed, Math.min(Math.max(limit, 1), 500)).map(withExtra);
-  const hasEngagement = rows.some((r) => r.activity !== null && r.activity !== void 0);
+  const avail = db.prepare(
+    `SELECT ${CANDIDATE_SIGNALS.map((s) => `COUNT(${s.expr}) AS ${s.key}`).join(", ")},
+              COUNT(json_extract(extra, '$.last_email_open')) AS last_email_open
+       FROM subscribers WHERE is_active = 1 AND plan = 'free'`
+  ).get();
+  const used = CANDIDATE_SIGNALS.filter((s) => avail[s.key] > 0).map((s) => s.label);
+  if (avail.last_email_open > 0) used.push("penalizaci\xF3n por \xFAltima apertura antigua");
+  const missing = CANDIDATE_SIGNALS.filter((s) => !avail[s.key]).map((s) => s.label);
   return {
-    method: hasEngagement ? "engagement real por contacto: activity (0-5), emails_opened_30d, days_active_30d; antig\xFCedad como desempate" : "PROXY: la BD no tiene engagement individual (export legado); ordenado por antig\xFCedad entre free activos",
+    method: used.length ? `puntuaci\xF3n sobre free activos con: ${used.join(", ")}; antig\xFCedad solo como desempate` + (missing.length ? `. Sin datos en esta base (no punt\xFAan): ${missing.join(", ")}` : "") : "PROXY: la base no tiene ninguna se\xF1al de engagement individual; solo se ordena por antig\xFCedad",
+    signals_available: avail,
     min_days_subscribed: minDaysSubscribed,
     count: rows.length,
     rows
   };
 }
-function getPostPerformance(db, sort = "post_date", limit = 50) {
-  const col2 = { open_rate: "s.open_rate", views: "s.views", subscribes: "s.subscribes", signups: "s.signups", post_date: "s.post_date" }[sort];
+function getPostPerformance(db, sort = "post_date", limit = 50, from, to) {
+  const col3 = POST_SORT_COLUMNS[sort] ?? POST_SORT_COLUMNS.post_date;
+  const r = dateRange("s.post_date", from, to);
   return db.prepare(
     `WITH latest AS (
          SELECT post_id, MAX(run_id) AS run_id FROM post_email_stats GROUP BY post_id
        )
-       SELECT s.post_id, COALESCE(p.title, s.title) AS title, p.subtitle, s.post_date, p.type,
-              COALESCE(p.audience, s.audience) AS audience, p.is_published,
-              s.views, s.open_rate, s.engagement_rate, s.signups, s.subscribes, s.estimated_value
+       SELECT s.post_id, COALESCE(p.title, s.title) AS title, p.subtitle, s.post_date, p.type, p.slug, p.wordcount,
+              COALESCE(p.audience, s.audience) AS audience, p.is_published, p.email_sent_at,
+              s.views, s.open_rate, s.engagement_rate, s.signups, s.subscribes, s.estimated_value,
+              s.sent, s.delivered, s.opens, s.opened, s.clicks, s.clicked, s.click_rate,
+              s.likes, s.comments, s.shares, s.restacks, s.unsubscribes, s.finished_post,
+              ${POST_RATIOS}
        FROM post_email_stats s
        JOIN latest l ON l.post_id = s.post_id AND l.run_id = s.run_id
        LEFT JOIN posts p ON p.post_id = s.post_id
-       ORDER BY ${col2} DESC NULLS LAST
+       WHERE ${r.sql}
+       ORDER BY ${col3} DESC NULLS LAST
        LIMIT ?`
-  ).all(Math.min(Math.max(limit, 1), 500));
+  ).all(...r.args, Math.min(Math.max(limit, 1), 500));
+}
+function getPost(db, opts) {
+  const key = (opts.id ?? opts.slug ?? "").trim();
+  if (!key) return null;
+  const post = db.prepare(
+    `SELECT * FROM posts
+       WHERE post_id = ? OR slug = ? OR post_id LIKE '%.' || ?
+       ORDER BY post_date DESC LIMIT 1`
+  ).get(key, key, key);
+  const postId = post?.post_id ?? db.prepare("SELECT post_id FROM post_email_stats WHERE post_id = ? LIMIT 1").get(key)?.post_id;
+  if (!postId) return null;
+  const latest = db.prepare(
+    `SELECT s.*, ${POST_RATIOS}
+       FROM post_email_stats s WHERE s.post_id = ? ORDER BY s.run_id DESC LIMIT 1`
+  ).get(postId);
+  const history = db.prepare(
+    `SELECT s.run_id, r.started_at AS synced_at, s.views, s.open_rate, s.click_rate, s.signups, s.subscribes,
+              s.sent, s.delivered, s.opened, s.clicked, s.likes, s.comments, s.shares, s.restacks, s.unsubscribes
+       FROM post_email_stats s JOIN sync_runs r ON r.id = s.run_id
+       WHERE s.post_id = ? ORDER BY s.run_id`
+  ).all(postId);
+  return {
+    post: post ? withExtra(post) : null,
+    latest_stats: latest ? withExtra(latest) : null,
+    runs: history.length,
+    history
+  };
 }
 function getGrowth(db, from, to, groupBy = "month") {
-  const where = [];
-  const args = [];
-  if (from) {
-    where.push("date >= ?");
-    args.push(from);
-  }
-  if (to) {
-    where.push("date <= ?");
-    args.push(to);
-  }
-  const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const r = dateRange("date", from, to);
+  const args = r.args;
+  const w = from || to ? `WHERE ${r.sql}` : "";
   const bucket = {
     day: "date",
     week: "strftime('%Y-W%W', date)",
@@ -2914,17 +2966,9 @@ function getGrowth(db, from, to, groupBy = "month") {
   return { group_by: groupBy, from: from ?? null, to: to ?? null, growth_sources: bySource, subscriber_growth: daily };
 }
 function getChurn(db, from, to) {
-  const where = [];
-  const args = [];
-  if (from) {
-    where.push("unsubscribed_at >= ?");
-    args.push(from);
-  }
-  if (to) {
-    where.push("unsubscribed_at <= ?");
-    args.push(to);
-  }
-  const w = where.length ? `WHERE ${where.join(" AND ")}` : "WHERE unsubscribed_at IS NOT NULL";
+  const r = dateRange("unsubscribed_at", from, to);
+  const w = `WHERE unsubscribed_at IS NOT NULL AND ${r.sql}`;
+  const args = [...r.args];
   const churned = db.prepare(`SELECT email, plan, subscribed_at, unsubscribed_at FROM subscribers ${w} ORDER BY unsubscribed_at DESC LIMIT 500`).all(...args);
   const transitions = db.prepare(
     `SELECT a.email, a.plan AS from_plan, b.plan AS to_plan, r.started_at AS changed_at
@@ -2932,15 +2976,18 @@ function getChurn(db, from, to) {
        JOIN subscriber_snapshots b ON b.email = a.email
          AND b.run_id = (SELECT MIN(run_id) FROM subscriber_snapshots WHERE email = a.email AND run_id > a.run_id)
        JOIN sync_runs r ON r.id = b.run_id
-       WHERE a.plan <> b.plan ${from ? "AND r.started_at >= ?" : ""} ${to ? "AND r.started_at <= ?" : ""}
+       WHERE a.plan <> b.plan AND ${dateRange("r.started_at", from, to).sql}
        ORDER BY r.started_at DESC LIMIT 500`
-  ).all(...[from, to].filter(Boolean));
+  ).all(...dateRange("r.started_at", from, to).args);
+  const paid = new Set(PAID_PLANS);
   const summary = {
     churned: churned.length,
-    upgrades: transitions.filter((t) => t.from_plan === "free" && t.to_plan !== "free" && t.to_plan !== "churned").length,
-    downgrades: transitions.filter((t) => t.from_plan !== "free" && t.to_plan === "free").length
+    // Solo cuenta como alta de pago la que entra en un plan que cobra: pasar a `author` o `comp`
+    // no es una conversión.
+    upgrades: transitions.filter((t) => t.from_plan === "free" && paid.has(t.to_plan)).length,
+    downgrades: transitions.filter((t) => paid.has(t.from_plan) && t.to_plan === "free").length
   };
-  return { summary, churned, transitions };
+  return { range: { from: from ?? null, to: to ?? null, both_ends_inclusive: true }, summary, churned, transitions };
 }
 function getSchema(db) {
   const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
@@ -3056,14 +3103,278 @@ function coverage(db) {
     return { dataset, rows, last_run_id, ever_fetched, missing: rows === 0 && !ever_fetched };
   });
 }
-var FORBIDDEN, DATASETS, missingDatasets;
+function getReaders(db, segment, limit = 50) {
+  const counts = db.prepare(`${READER_BASE} SELECT segment, COUNT(*) AS n FROM s GROUP BY segment`).all();
+  const where = segment ? "WHERE segment = ?" : "";
+  const rows = db.prepare(
+    `${READER_BASE}
+       SELECT email, name, plan, source, segment, activity, emails_received_6mo, unique_emails_seen_6mo,
+              unique_emails_seen_30d, ROUND(open_ratio, 3) AS open_ratio, links_clicked,
+              last_email_open, days_since_last_open, subscribed_at
+       FROM s ${where}
+       ORDER BY open_ratio DESC NULLS LAST, emails_received_6mo DESC, subscribed_at ASC
+       LIMIT ?`
+  ).all(...segment ? [segment] : [], Math.min(Math.max(limit, 1), 500));
+  return {
+    criteria: {
+      "abre-todo": "aperturas \xFAnicas >= correos recibidos (6 meses)",
+      regular: "abre algunos, pero no todos",
+      dormido: "recibi\xF3 >= 3 correos y no abre ninguno desde hace m\xE1s de 60 d\xEDas",
+      "nunca-abre": "recibi\xF3 correos y no ha abierto ninguno",
+      "sin-envios": "todav\xEDa no ha recibido ning\xFAn correo: no se puede juzgar"
+    },
+    counts_by_segment: Object.fromEntries(counts.map((c) => [c.segment, c.n])),
+    segment: segment ?? null,
+    count: rows.length,
+    rows
+  };
+}
+function getAtRisk(db, days = 60, limit = 50) {
+  const d = Math.min(Math.max(days, 1), 3650);
+  const rows = db.prepare(
+    `${READER_BASE}
+       SELECT email, name, plan, source, segment, activity, emails_received_6mo, unique_emails_seen_6mo,
+              ROUND(open_ratio, 3) AS open_ratio, last_email_open, days_since_last_open, subscribed_at,
+              CASE WHEN ${PAID_SQL} THEN 1 ELSE 0 END AS is_paid
+       FROM s
+       WHERE emails_received_6mo >= 3
+         AND (last_email_open IS NULL OR julianday('now') - julianday(last_email_open) > ?)
+       ORDER BY is_paid DESC, emails_received_6mo DESC, days_since_last_open DESC NULLS FIRST
+       LIMIT ?`
+  ).all(d, Math.min(Math.max(limit, 1), 500));
+  return {
+    criteria: `activos con >= 3 correos recibidos (6 meses) y sin abrir ninguno desde hace m\xE1s de ${d} d\xEDas`,
+    days: d,
+    count: rows.length,
+    rows
+  };
+}
+function getBestTime(db, tzOffsetHours = 0, minPosts = 1) {
+  const tz = Math.min(Math.max(Math.trunc(tzOffsetHours), -14), 14);
+  const modifier = `${tz >= 0 ? "+" : ""}${tz} hours`;
+  const base = `
+    WITH latest AS (SELECT post_id, MAX(run_id) AS run_id FROM post_email_stats GROUP BY post_id),
+    e AS (
+      SELECT s.post_id, s.open_rate, s.click_rate,
+             datetime(COALESCE(p.email_sent_at, p.post_date), ?) AS sent_local
+      FROM post_email_stats s
+      JOIN latest l ON l.post_id = s.post_id AND l.run_id = s.run_id
+      JOIN posts p ON p.post_id = s.post_id
+      WHERE COALESCE(p.email_sent_at, p.post_date) IS NOT NULL
+    )`;
+  const byWeekday = db.prepare(
+    `${base}
+       SELECT CAST(strftime('%w', sent_local) AS INTEGER) AS weekday, COUNT(*) AS posts,
+              AVG(open_rate) AS avg_open_rate, AVG(click_rate) AS avg_click_rate
+       FROM e GROUP BY weekday HAVING posts >= ? ORDER BY weekday`
+  ).all(modifier, minPosts);
+  const byHour = db.prepare(
+    `${base}
+       SELECT CAST(strftime('%H', sent_local) AS INTEGER) AS hour, COUNT(*) AS posts,
+              AVG(open_rate) AS avg_open_rate, AVG(click_rate) AS avg_click_rate
+       FROM e GROUP BY hour HAVING posts >= ? ORDER BY hour`
+  ).all(modifier, minPosts);
+  const cells = db.prepare(
+    `${base}
+       SELECT CAST(strftime('%w', sent_local) AS INTEGER) AS weekday,
+              CAST(strftime('%H', sent_local) AS INTEGER) AS hour, COUNT(*) AS posts,
+              AVG(open_rate) AS avg_open_rate
+       FROM e GROUP BY weekday, hour HAVING posts >= ? ORDER BY avg_open_rate DESC NULLS LAST`
+  ).all(modifier, minPosts);
+  const cov = db.prepare(
+    `WITH latest AS (SELECT post_id, MAX(run_id) AS run_id FROM post_email_stats GROUP BY post_id)
+       SELECT COUNT(*) AS posts_with_stats,
+              SUM(CASE WHEN COALESCE(p.email_sent_at, p.post_date) IS NOT NULL THEN 1 ELSE 0 END) AS posts_with_time,
+              SUM(CASE WHEN p.email_sent_at IS NOT NULL THEN 1 ELSE 0 END) AS time_from_email_sent_at,
+              SUM(CASE WHEN p.email_sent_at IS NULL AND p.post_date IS NOT NULL THEN 1 ELSE 0 END) AS time_from_post_date,
+              COUNT(s.open_rate) AS posts_with_open_rate
+       FROM post_email_stats s
+       JOIN latest l ON l.post_id = s.post_id AND l.run_id = s.run_id
+       LEFT JOIN posts p ON p.post_id = s.post_id`
+  ).get();
+  const named = (rows) => rows.map((r) => ({ ...r, weekday_name: WEEKDAYS[r.weekday] }));
+  return {
+    tz_offset_hours: tz,
+    coverage: cov,
+    // Sin ninguna hora no hay nada que agrupar: se dice, en vez de devolver tablas vacías a secas.
+    note: cov.posts_with_time === 0 ? "ning\xFAn post tiene hora (`email_sent_at` ni `post_date`): no hay nada que analizar" : cov.time_from_email_sent_at === 0 ? "la hora sale de `post_date` (el archivo de Substack no devuelve `email_sent_at`); mira `posts` en cada celda antes de concluir" : "medias sobre la hora de env\xEDo; mira `posts` en cada celda antes de concluir",
+    by_weekday: named(byWeekday),
+    by_hour: byHour,
+    by_weekday_hour: named(cells)
+  };
+}
+function getSources(db, limit = 50) {
+  const lim = Math.min(Math.max(limit, 1), 500);
+  const bySource = db.prepare(
+    `SELECT COALESCE(source, '(sin fuente)') AS source,
+              COUNT(*) AS total,
+              SUM(is_active) AS active,
+              SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS unsubscribed,
+              SUM(CASE WHEN is_active = 1 AND ${PAID_SQL} THEN 1 ELSE 0 END) AS active_paid,
+              AVG(json_extract(extra, '$.activity')) AS avg_activity,
+              CASE WHEN SUM(CASE WHEN ${RECEIVED_6MO} > 0 THEN ${RECEIVED_6MO} END) > 0
+                   THEN 1.0 * SUM(CASE WHEN ${RECEIVED_6MO} > 0 THEN COALESCE(${SEEN_6MO}, 0) END)
+                          / SUM(CASE WHEN ${RECEIVED_6MO} > 0 THEN ${RECEIVED_6MO} END) END AS open_rate,
+              COUNT(${RECEIVED_6MO}) AS with_email_data
+       FROM subscribers GROUP BY COALESCE(source, '(sin fuente)')
+       ORDER BY active DESC, total DESC LIMIT ?`
+  ).all(lim);
+  const unsubsBySource = db.prepare(
+    `SELECT COALESCE(source, '(sin fuente)') AS source, COUNT(*) AS unsubscribes,
+              MIN(unsubscribed_at) AS first_unsubscribe, MAX(unsubscribed_at) AS last_unsubscribe
+       FROM unsubscribes GROUP BY COALESCE(source, '(sin fuente)') ORDER BY unsubscribes DESC LIMIT ?`
+  ).all(lim);
+  const visitors = db.prepare(
+    `SELECT source, category, views, users, free_signups, subscribed,
+              CASE WHEN users > 0 THEN 1.0 * free_signups / users END AS signup_rate
+       FROM visitor_sources ORDER BY free_signups DESC, views DESC LIMIT ?`
+  ).all(lim);
+  const network = db.prepare(
+    "SELECT label, time_window, subscribers, pct_of_total FROM network_attribution ORDER BY time_window, subscribers DESC"
+  ).all();
+  return {
+    by_subscriber_source: bySource,
+    unsubscribes_by_source: unsubsBySource,
+    visitor_sources: visitors,
+    network_attribution: network,
+    note: "`by_subscriber_source` cuenta personas de la lista; `visitor_sources` cuenta visitas del panel. Son universos distintos y no deben sumarse."
+  };
+}
+function getSeries(db, from, to, groupBy = "day") {
+  const bucketOf = (col3) => ({ day: col3, week: `strftime('%Y-W%W', ${col3})`, month: `substr(${col3}, 1, 7)` })[groupBy];
+  const args = [];
+  const rng = (col3) => {
+    const r = dateRange(col3, from, to);
+    args.push(...r.args);
+    return r.sql;
+  };
+  const sql = `
+    WITH d AS (
+      SELECT date FROM subscriber_totals WHERE ${rng("date")}
+      UNION SELECT date FROM followers_daily WHERE ${rng("date")}
+      UNION SELECT date FROM traffic WHERE ${rng("date")}
+      UNION SELECT date FROM subscriber_growth_daily WHERE ${rng("date")}
+    ),
+    b AS (SELECT DISTINCT ${bucketOf("date")} AS bucket FROM d)
+    SELECT b.bucket,
+           (SELECT MIN(date) FROM d WHERE ${bucketOf("d.date")} = b.bucket) AS from_date,
+           (SELECT MAX(date) FROM d WHERE ${bucketOf("d.date")} = b.bucket) AS to_date,
+           (SELECT t.total_subscribers FROM subscriber_totals t
+             WHERE ${bucketOf("t.date")} = b.bucket AND ${rng("t.date")}
+             ORDER BY t.date DESC LIMIT 1) AS total_subscribers_end,
+           (SELECT f.followers FROM followers_daily f
+             WHERE ${bucketOf("f.date")} = b.bucket AND ${rng("f.date")}
+             ORDER BY f.date DESC LIMIT 1) AS followers_end,
+           (SELECT SUM(x.views) FROM traffic x
+             WHERE ${bucketOf("x.date")} = b.bucket AND ${rng("x.date")}) AS views,
+           (SELECT SUM(g.new_free) FROM subscriber_growth_daily g
+             WHERE ${bucketOf("g.date")} = b.bucket AND ${rng("g.date")}) AS new_free,
+           (SELECT SUM(g.unsubscribes) FROM subscriber_growth_daily g
+             WHERE ${bucketOf("g.date")} = b.bucket AND ${rng("g.date")}) AS unsubscribes,
+           (SELECT SUM(g.new_paid) FROM subscriber_growth_daily g
+             WHERE ${bucketOf("g.date")} = b.bucket AND ${rng("g.date")}) AS new_paid
+    FROM b ORDER BY b.bucket`;
+  const rows = db.prepare(sql).all(...args);
+  const sources = Object.fromEntries(
+    ["subscriber_totals", "followers_daily", "traffic", "subscriber_growth_daily"].map((t) => [
+      t,
+      db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n
+    ])
+  );
+  return {
+    group_by: groupBy,
+    range: { from: from ?? null, to: to ?? null, both_ends_inclusive: true },
+    rows_in_source_tables: sources,
+    note: "`*_end` es el nivel al cierre del tramo; `views`, `new_free`, `unsubscribes` y `new_paid` son sumas. null = no hay serie para ese tramo.",
+    count: rows.length,
+    rows
+  };
+}
+function getReferrers(db, limit = 50) {
+  const rows = db.prepare(
+    `SELECT user_id, name, handle, visitors, free_subscribers, paid_subscribers,
+              (free_subscribers + paid_subscribers) AS subscribers,
+              'https://substack.com/@' || COALESCE(handle, '') AS url
+       FROM referrers ORDER BY subscribers DESC, visitors DESC LIMIT ?`
+  ).all(Math.min(Math.max(limit, 1), 500));
+  const last = db.prepare("SELECT MAX(run_id) AS r FROM referrers").get().r ?? null;
+  return {
+    last_run_id: last,
+    note: "`visitors` y `*_subscribers` los da el panel sobre ventanas distintas; no son un embudo y no deben dividirse.",
+    count: rows.length,
+    rows
+  };
+}
+function getOverlap(db, limit = 50, minPercent = 0) {
+  const rows = db.prepare(
+    `SELECT subdomain, name, author, percent_overlap,
+              'https://' || subdomain || '.substack.com' AS url
+       FROM audience_overlap WHERE percent_overlap >= ? ORDER BY percent_overlap DESC LIMIT ?`
+  ).all(minPercent, Math.min(Math.max(limit, 1), 500));
+  const last = db.prepare("SELECT MAX(run_id) AS r FROM audience_overlap").get().r ?? null;
+  return { last_run_id: last, min_percent: minPercent, count: rows.length, rows };
+}
+var PAID_PLANS, PAID_SQL, OTHER_SQL, SEEN_6MO, SEEN_30D, RECEIVED_6MO, OPEN_RATIO, CANDIDATE_SIGNALS, STALENESS_PENALTY, POST_RATIOS, POST_SORT_COLUMNS, FORBIDDEN, DATASETS, missingDatasets, READER_BASE, READER_SEGMENTS, WEEKDAYS;
 var init_queries = __esm({
   "src/queries.ts"() {
     "use strict";
+    PAID_PLANS = ["monthly", "yearly", "paid", "founding"];
+    PAID_SQL = `plan IN (${PAID_PLANS.map((p) => `'${p}'`).join(", ")})`;
+    OTHER_SQL = `plan <> 'free' AND NOT (${PAID_SQL})`;
+    SEEN_6MO = `CAST(json_extract(extra, '$."Unique emails seen (6mo)"') AS INTEGER)`;
+    SEEN_30D = `CAST(json_extract(extra, '$."Unique emails seen (30d)"') AS INTEGER)`;
+    RECEIVED_6MO = `json_extract(extra, '$.emails_received_6mo')`;
+    OPEN_RATIO = `CASE WHEN COALESCE(${RECEIVED_6MO}, 0) > 0 THEN 1.0 * COALESCE(${SEEN_6MO}, 0) / ${RECEIVED_6MO} END`;
+    CANDIDATE_SIGNALS = [
+      { key: "activity", label: "activity (0-5)", expr: "json_extract(extra, '$.activity')", term: "COALESCE(json_extract(extra, '$.activity'), 0) * 2.0" },
+      { key: "open_ratio_6mo", label: "ratio de aperturas \xFAnicas (6mo)", expr: OPEN_RATIO, term: `COALESCE(${OPEN_RATIO}, 0) * 5.0` },
+      { key: "links_clicked", label: "clics en enlaces", expr: "json_extract(extra, '$.links_clicked')", term: "MIN(COALESCE(json_extract(extra, '$.links_clicked'), 0), 20) * 0.25" },
+      { key: "comments", label: "comentarios", expr: "json_extract(extra, '$.comments')", term: "MIN(COALESCE(json_extract(extra, '$.comments'), 0), 10) * 0.5" },
+      { key: "shares", label: "shares", expr: "json_extract(extra, '$.shares')", term: "MIN(COALESCE(json_extract(extra, '$.shares'), 0), 10) * 0.5" }
+    ];
+    STALENESS_PENALTY = `
+  CASE
+    WHEN json_extract(extra, '$.last_email_open') IS NULL THEN 3.0
+    WHEN julianday('now') - julianday(json_extract(extra, '$.last_email_open')) > 90 THEN 3.0
+    WHEN julianday('now') - julianday(json_extract(extra, '$.last_email_open')) > 60 THEN 2.0
+    WHEN julianday('now') - julianday(json_extract(extra, '$.last_email_open')) > 30 THEN 1.0
+    ELSE 0.0
+  END`;
+    POST_RATIOS = `
+  CASE WHEN s.views > 0 THEN 1000.0 * s.signups / s.views END AS signups_per_1k_views,
+  CASE WHEN s.views > 0 THEN 1000.0 * s.subscribes / s.views END AS subscribes_per_1k_views,
+  CASE WHEN s.delivered > 0 THEN 1.0 * s.unsubscribes / s.delivered END AS unsubscribe_rate,
+  CASE WHEN s.opened > 0 THEN 1.0 * s.clicked / s.opened END AS click_to_open_rate,
+  CASE WHEN s.sent > 0 THEN 1.0 * s.delivered / s.sent END AS delivery_rate`;
+    POST_SORT_COLUMNS = {
+      post_date: "s.post_date",
+      open_rate: "s.open_rate",
+      views: "s.views",
+      subscribes: "s.subscribes",
+      signups: "s.signups",
+      engagement_rate: "s.engagement_rate",
+      sent: "s.sent",
+      delivered: "s.delivered",
+      opens: "s.opens",
+      opened: "s.opened",
+      clicks: "s.clicks",
+      clicked: "s.clicked",
+      click_rate: "s.click_rate",
+      likes: "s.likes",
+      comments: "s.comments",
+      shares: "s.shares",
+      restacks: "s.restacks",
+      unsubscribes: "s.unsubscribes",
+      wordcount: "p.wordcount",
+      signups_per_1k_views: "signups_per_1k_views",
+      click_to_open_rate: "click_to_open_rate"
+    };
     FORBIDDEN = /\b(insert|update|delete|drop|alter|create|attach|detach|pragma|vacuum|reindex|load_extension)\b|\breplace\s+into\b/i;
     DATASETS = [
       { dataset: "subscribers", table: "subscribers", runColumn: "last_synced_run_id", source: "email_list" },
-      { dataset: "posts", table: "posts", source: "posts" },
+      // `posts` ya registra el run que la llenó; antes devolvía siempre last_run_id: null porque la
+      // columna no existía, y `status` no podía decir de qué sync venían los posts.
+      { dataset: "posts", table: "posts", runColumn: "last_synced_run_id", source: "posts" },
       { dataset: "post_stats", table: "post_email_stats", runColumn: "run_id", source: "email_stats" },
       { dataset: "growth", table: "growth_sources", runColumn: "run_id", source: "growth_sources" },
       { dataset: "traffic", table: "traffic", runColumn: "run_id", source: "traffic" },
@@ -3071,9 +3382,50 @@ var init_queries = __esm({
       { dataset: "subscriber_growth", table: "subscriber_growth_daily", runColumn: "run_id", source: "paid_subscriber_growth" },
       { dataset: "notes", table: "notes", runColumn: "last_synced_run_id", source: "notes" },
       // Las interacciones vienen dentro del mismo bundle que las notas.
-      { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id", source: "notes" }
+      { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id", source: "notes" },
+      // Tablas del panel. Cada una tiene su propio `kind` en raw_files, así que `status` distingue
+      // «nunca se descargó» de «se descargó y venía vacía» una por una.
+      { dataset: "followers", table: "followers_daily", runColumn: "run_id", source: "followers" },
+      { dataset: "unsubscribes", table: "unsubscribes", runColumn: "run_id", source: "unsubscribes" },
+      { dataset: "visitor_sources", table: "visitor_sources", runColumn: "run_id", source: "visitor_sources" },
+      { dataset: "network_attribution", table: "network_attribution", runColumn: "run_id", source: "network_attribution" },
+      { dataset: "audience_location", table: "audience_location", runColumn: "run_id", source: "audience_location" },
+      { dataset: "audience_overlap", table: "audience_overlap", runColumn: "run_id", source: "audience_overlap" },
+      { dataset: "referrers", table: "referrers", runColumn: "run_id", source: "referrers" },
+      { dataset: "pub_summary", table: "pub_summary", runColumn: "run_id", source: "pub_summary" }
     ];
     missingDatasets = (db) => coverage(db).filter((c) => c.missing).map((c) => c.dataset);
+    READER_BASE = `
+  WITH r AS (
+    SELECT email, plan, source, subscribed_at,
+           json_extract(extra, '$.name') AS name,
+           json_extract(extra, '$.activity') AS activity,
+           ${RECEIVED_6MO} AS emails_received_6mo,
+           ${SEEN_6MO} AS unique_emails_seen_6mo,
+           ${SEEN_30D} AS unique_emails_seen_30d,
+           json_extract(extra, '$.links_clicked') AS links_clicked,
+           json_extract(extra, '$.last_email_open') AS last_email_open
+    FROM subscribers WHERE is_active = 1
+  ),
+  s AS (
+    SELECT r.*,
+           CASE WHEN emails_received_6mo > 0
+                THEN 1.0 * COALESCE(unique_emails_seen_6mo, 0) / emails_received_6mo END AS open_ratio,
+           CAST(julianday('now') - julianday(last_email_open) AS INTEGER) AS days_since_last_open,
+           CASE
+             -- Sin correos recibidos no hay nada que juzgar; no es \xABnunca abre\xBB.
+             WHEN COALESCE(emails_received_6mo, 0) = 0 THEN 'sin-envios'
+             WHEN COALESCE(unique_emails_seen_6mo, 0) = 0 THEN 'nunca-abre'
+             WHEN emails_received_6mo >= 3
+                  AND (last_email_open IS NULL OR julianday('now') - julianday(last_email_open) > 60)
+                  THEN 'dormido'
+             WHEN unique_emails_seen_6mo >= emails_received_6mo THEN 'abre-todo'
+             ELSE 'regular'
+           END AS segment
+    FROM r
+  )`;
+    READER_SEGMENTS = ["abre-todo", "regular", "dormido", "nunca-abre", "sin-envios"];
+    WEEKDAYS = ["domingo", "lunes", "martes", "mi\xE9rcoles", "jueves", "viernes", "s\xE1bado"];
   }
 });
 
@@ -3298,6 +3650,9 @@ CREATE TABLE IF NOT EXISTS subscriber_snapshots (
   extra TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (run_id, email)
 );
+-- churn compara cada snapshot con el siguiente del mismo contacto. Sin este \xEDndice esa
+-- comparaci\xF3n recorre la tabla entera por cada fila.
+CREATE INDEX IF NOT EXISTS idx_snapshots_email ON subscriber_snapshots(email, run_id);
 
 CREATE TABLE IF NOT EXISTS posts (
   post_id TEXT PRIMARY KEY,
@@ -3310,6 +3665,8 @@ CREATE TABLE IF NOT EXISTS posts (
   type TEXT,
   audience TEXT,
   slug TEXT,
+  wordcount INTEGER,
+  last_synced_run_id INTEGER REFERENCES sync_runs(id),
   extra TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_posts_post_date ON posts(post_date);
@@ -3327,6 +3684,19 @@ CREATE TABLE IF NOT EXISTS post_email_stats (
   subscribes INTEGER,
   estimated_value REAL,
   open_rate REAL,
+  sent INTEGER,
+  delivered INTEGER,
+  opens INTEGER,
+  opened INTEGER,
+  clicks INTEGER,
+  clicked INTEGER,
+  click_rate REAL,
+  likes INTEGER,
+  comments INTEGER,
+  shares INTEGER,
+  restacks INTEGER,
+  unsubscribes INTEGER,
+  finished_post INTEGER,
   extra TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (post_id, run_id)
 );
@@ -3396,6 +3766,84 @@ CREATE TABLE IF NOT EXISTS note_interactions (
 );
 CREATE INDEX IF NOT EXISTS idx_note_interactions_actor ON note_interactions(actor_user_id);
 
+-- Serie diaria de seguidores: gente que sigue la publicaci\xF3n sin estar suscrita.
+CREATE TABLE IF NOT EXISTS followers_daily (
+  date TEXT PRIMARY KEY,
+  followers INTEGER NOT NULL,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Bajas con su fecha real, tal como las lista el panel. subscribers.unsubscribed_at solo tiene
+-- fecha fiable para quien sigue apareciendo en el export; esta tabla no depende de eso.
+CREATE TABLE IF NOT EXISTS unsubscribes (
+  email TEXT NOT NULL,
+  unsubscribed_at TEXT,
+  subscribed_at TEXT,
+  plan TEXT,
+  source TEXT,
+  name TEXT,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+  PRIMARY KEY (email, unsubscribed_at)
+);
+
+-- Fuentes de visita del rango completo, con altas por fuente. Es una foto, no una serie:
+-- cada sync la reemplaza entera.
+CREATE TABLE IF NOT EXISTS visitor_sources (
+  source TEXT PRIMARY KEY,
+  category TEXT,
+  views INTEGER NOT NULL DEFAULT 0,
+  users INTEGER NOT NULL DEFAULT 0,
+  free_signups INTEGER NOT NULL DEFAULT 0,
+  subscribed INTEGER NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Cu\xE1nto de la audiencia llega por la red de Substack y cu\xE1nto de fuera.
+CREATE TABLE IF NOT EXISTS network_attribution (
+  label TEXT NOT NULL,
+  time_window TEXT NOT NULL,
+  subscribers INTEGER NOT NULL DEFAULT 0,
+  pct_of_total REAL,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+  PRIMARY KEY (label, time_window)
+);
+
+CREATE TABLE IF NOT EXISTS audience_location (
+  location TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value INTEGER NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+  PRIMARY KEY (location, metric)
+);
+
+-- Publicaciones que comparten audiencia contigo: candidatas a recomendaci\xF3n cruzada.
+CREATE TABLE IF NOT EXISTS audience_overlap (
+  subdomain TEXT PRIMARY KEY,
+  name TEXT,
+  author TEXT,
+  percent_overlap REAL NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Qui\xE9n te trae lectores.
+CREATE TABLE IF NOT EXISTS referrers (
+  user_id TEXT PRIMARY KEY,
+  name TEXT,
+  handle TEXT,
+  visitors INTEGER NOT NULL DEFAULT 0,
+  free_subscribers INTEGER NOT NULL DEFAULT 0,
+  paid_subscribers INTEGER NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Las cifras sueltas del panel (retenci\xF3n, referidos, apertura y visitas de 30 d\xEDas) en
+-- clave/valor, para no inventar una tabla por n\xFAmero.
+CREATE TABLE IF NOT EXISTS pub_summary (
+  metric TEXT PRIMARY KEY,
+  value TEXT,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
 CREATE TABLE IF NOT EXISTS subscriber_growth_daily (
   date TEXT PRIMARY KEY,
   new_free INTEGER,
@@ -3415,7 +3863,35 @@ function openDb(path) {
   const db = new import_node_sqlite.DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA_SQL);
+  migrate(db);
   return db;
+}
+var ADDED_COLUMNS = {
+  posts: ["wordcount INTEGER", "last_synced_run_id INTEGER"],
+  post_email_stats: [
+    "sent INTEGER",
+    "delivered INTEGER",
+    "opens INTEGER",
+    "opened INTEGER",
+    "clicks INTEGER",
+    "clicked INTEGER",
+    "click_rate REAL",
+    "likes INTEGER",
+    "comments INTEGER",
+    "shares INTEGER",
+    "restacks INTEGER",
+    "unsubscribes INTEGER",
+    "finished_post INTEGER"
+  ]
+};
+function migrate(db) {
+  for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+    const have = new Set(tableColumns(db, table));
+    for (const decl of columns) {
+      const name = decl.split(" ")[0];
+      if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${decl}`);
+    }
+  }
 }
 function nowIso() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -3431,6 +3907,15 @@ function finishRun(db, runId, status, notes) {
     notes ?? null,
     runId
   );
+}
+function tableColumns(db, table) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+}
+function markRunPartial(db, runId, extra) {
+  const row = db.prepare("SELECT notes FROM sync_runs WHERE id = ?").get(runId);
+  const notes = [row?.notes, `fuentes que no se pudieron descargar:
+${extra}`].filter(Boolean).join("\n");
+  db.prepare("UPDATE sync_runs SET status = 'partial', notes = ? WHERE id = ?").run(notes, runId);
 }
 
 // src/load/index.ts
@@ -3672,8 +4157,8 @@ var init_state = function(options) {
 };
 
 // node_modules/csv-parse/lib/utils/underscore.js
-var underscore = function(str2) {
-  return str2.replace(/([A-Z])/g, function(_, match) {
+var underscore = function(str3) {
+  return str3.replace(/([A-Z])/g, function(_, match) {
     return "_" + match.toLowerCase();
   });
 };
@@ -5154,7 +5639,16 @@ var SIGNATURES = {
   posts: ["post_id", "post_date", "is_published"],
   free_subscriber_growth: ["date", "new_free"],
   paid_subscriber_growth: ["date", "new_paid"],
-  subscriber_totals: ["date", "total_subscribers"]
+  subscriber_totals: ["date", "total_subscribers"],
+  followers: ["date", "followers"],
+  unsubscribes: ["email", "unsubscribed_at"],
+  unsubscribes_daily: ["date", "unsubscribes"],
+  visitor_sources: ["source", "views", "users"],
+  network_attribution: ["label", "subscribers"],
+  audience_location: ["location", "metric", "value"],
+  audience_overlap: ["subdomain", "percent_overlap"],
+  referrers: ["user_id", "visitors"],
+  pub_summary: ["metric", "value"]
 };
 var EMAIL_LIST_SIGNATURES = [
   ["email", "active_subscription", "created_at"],
@@ -5361,6 +5855,13 @@ function loadEmailList(db, runId, rows) {
       snap.run(runId, r.email, r.isActive, r.plan, extra);
     }
     const stale = db.prepare("SELECT email FROM subscribers WHERE is_active = 1 AND last_synced_run_id <> ?").all(runId);
+    const desaparecidos = stale.filter((s) => !seen.has(s.email)).length;
+    const previos = desaparecidos + seen.size;
+    if (previos >= 20 && desaparecidos > previos * 0.3) {
+      throw new Error(
+        `el export solo trae ${seen.size} de ${previos} suscriptores activos: parece incompleto, no se marca ninguna baja`
+      );
+    }
     const gone = db.prepare(
       "UPDATE subscribers SET is_active = 0, unsubscribed_at = ?, last_synced_run_id = ? WHERE email = ?"
     );
@@ -5376,14 +5877,15 @@ function loadEmailList(db, runId, rows) {
     return res;
   });
 }
-function loadPosts(db, _runId, rows) {
+function loadPosts(db, runId, rows) {
   const res = { inserted: 0, updated: 0, skipped: 0 };
-  const stmt = db.prepare(`INSERT INTO posts (post_id, title, subtitle, post_date, is_published, email_sent_at, type, audience, slug, extra)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  const stmt = db.prepare(`INSERT INTO posts (post_id, title, subtitle, post_date, is_published, email_sent_at, type, audience, slug, wordcount, last_synced_run_id, extra)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET title=excluded.title, subtitle=excluded.subtitle, post_date=excluded.post_date,
       is_published=excluded.is_published, email_sent_at=excluded.email_sent_at, type=excluded.type, audience=excluded.audience,
-      slug=excluded.slug, extra=excluded.extra`);
-  const used = ["post_id", "title", "subtitle", "post_date", "is_published", "email_sent_at", "type", "audience"];
+      slug=excluded.slug, wordcount=excluded.wordcount, last_synced_run_id=excluded.last_synced_run_id, extra=excluded.extra`);
+  const used = ["post_id", "title", "subtitle", "post_date", "is_published", "email_sent_at", "type", "audience", "wordcount"];
+  const exists = db.prepare("SELECT 1 FROM posts WHERE post_id = ?");
   return tx(db, () => {
     for (const row of rows) {
       const id = (row.post_id ?? "").trim();
@@ -5392,6 +5894,7 @@ function loadPosts(db, _runId, rows) {
         continue;
       }
       const slug = id.includes(".") ? id.slice(id.indexOf(".") + 1) : null;
+      const had = !!exists.get(id);
       stmt.run(
         id,
         row.title ?? null,
@@ -5402,28 +5905,60 @@ function loadPosts(db, _runId, rows) {
         row.type ?? null,
         row.audience ?? null,
         slug,
+        toInt(row.wordcount),
+        runId,
         rest(row, used)
       );
-      res.inserted++;
+      had ? res.updated++ : res.inserted++;
     }
     return res;
   });
 }
-function resolvePostId(db, title, postDate) {
+function resolvePostId(db, title, postDate, rawId) {
+  const id = (rawId ?? "").trim();
+  if (id) {
+    const byId = db.prepare("SELECT post_id FROM posts WHERE post_id = ? OR post_id LIKE ?").get(id, `${id}.%`);
+    if (byId) return byId.post_id;
+  }
   if (postDate) {
     const byDate = db.prepare("SELECT post_id FROM posts WHERE post_date = ?").get(postDate);
     if (byDate) return byDate.post_id;
   }
   const byTitle = db.prepare("SELECT post_id FROM posts WHERE title = ? ORDER BY post_date DESC LIMIT 1").get(title);
   if (byTitle) return byTitle.post_id;
-  return "title:" + title;
+  return id ? id : "title:" + title;
 }
 function loadEmailStats(db, runId, rows) {
   const res = { inserted: 0, updated: 0, skipped: 0 };
   const stmt = db.prepare(`INSERT OR REPLACE INTO post_email_stats
-    (post_id, run_id, title, post_date, audience, views, engagement_rate, signups, subscribes, estimated_value, open_rate, extra)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  const used = ["title", "post_date", "audience", "views", "engagement_rate", "signups", "subscribes", "estimated_value", "open_rate"];
+    (post_id, run_id, title, post_date, audience, views, engagement_rate, signups, subscribes, estimated_value, open_rate,
+     sent, delivered, opens, opened, clicks, clicked, click_rate, likes, comments, shares, restacks, unsubscribes, finished_post, extra)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const used = [
+    "post_id",
+    "title",
+    "post_date",
+    "audience",
+    "views",
+    "engagement_rate",
+    "signups",
+    "subscribes",
+    "estimated_value",
+    "open_rate",
+    "sent",
+    "delivered",
+    "opens",
+    "opened",
+    "clicks",
+    "clicked",
+    "click_through_rate",
+    "likes",
+    "comments",
+    "shares",
+    "restacks",
+    "unsubscribes",
+    "subscribers_finished_post"
+  ];
   return tx(db, () => {
     for (const row of rows) {
       const title = (row.title ?? "").trim();
@@ -5433,7 +5968,7 @@ function loadEmailStats(db, runId, rows) {
       }
       const postDate = normDate(row.post_date);
       stmt.run(
-        resolvePostId(db, title, postDate),
+        resolvePostId(db, title, postDate, row.post_id),
         runId,
         title,
         postDate,
@@ -5444,6 +5979,19 @@ function loadEmailStats(db, runId, rows) {
         toInt(row.subscribes),
         toNum(row.estimated_value),
         toNum(row.open_rate),
+        toInt(row.sent),
+        toInt(row.delivered),
+        toInt(row.opens),
+        toInt(row.opened),
+        toInt(row.clicks),
+        toInt(row.clicked),
+        toNum(row.click_through_rate),
+        toInt(row.likes),
+        toInt(row.comments),
+        toInt(row.shares),
+        toInt(row.restacks),
+        toInt(row.unsubscribes),
+        toInt(row.subscribers_finished_post),
         rest(row, used)
       );
       res.inserted++;
@@ -5547,6 +6095,185 @@ function loadSubscriberTotals(db, runId, rows) {
   });
 }
 
+// src/load/statsLoaders.ts
+function tx2(db, fn) {
+  db.exec("BEGIN");
+  try {
+    const r = fn();
+    db.exec("COMMIT");
+    return r;
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+function col2(row, name) {
+  const want = name.toLowerCase().replace(/[\s_]+/g, "");
+  for (const [k, v] of Object.entries(row)) if (k.toLowerCase().replace(/[\s_]+/g, "") === want) return v;
+  return void 0;
+}
+var DEFS = {
+  followers: {
+    table: "followers_daily",
+    columns: [["date", "date", "date"], ["followers", "followers", "int"]],
+    required: ["date"]
+  },
+  unsubscribes: {
+    table: "unsubscribes",
+    columns: [
+      ["email", "email", "text"],
+      ["unsubscribed_at", "unsubscribed_at", "date"],
+      ["subscribed_at", "subscribed_at", "date"],
+      ["plan", "plan", "text"],
+      ["source", "source", "text"],
+      ["name", "name", "text"]
+    ],
+    required: ["email"]
+  },
+  visitor_sources: {
+    table: "visitor_sources",
+    columns: [
+      ["source", "source", "text"],
+      ["category", ["category", "source_category"], "text"],
+      ["views", "views", "int"],
+      ["users", "users", "int"],
+      ["free_signups", ["free_signups", "free_signup"], "int"],
+      ["subscribed", "subscribed", "int"]
+    ],
+    required: ["source"],
+    replaceAll: true
+  },
+  network_attribution: {
+    table: "network_attribution",
+    columns: [
+      ["label", "label", "text"],
+      ["time_window", "time_window", "text"],
+      ["subscribers", ["subscribers", "subs_count"], "int"],
+      ["pct_of_total", ["pct_of_total", "pct_time_window_total"], "num"]
+    ],
+    required: ["label"],
+    replaceAll: true
+  },
+  audience_location: {
+    table: "audience_location",
+    columns: [["location", "location", "text"], ["metric", "metric", "text"], ["value", "value", "int"]],
+    required: ["location"],
+    replaceAll: true
+  },
+  audience_overlap: {
+    table: "audience_overlap",
+    columns: [
+      ["subdomain", "subdomain", "text"],
+      ["name", "name", "text"],
+      ["author", "author", "text"],
+      ["percent_overlap", "percent_overlap", "num"]
+    ],
+    required: ["subdomain"],
+    replaceAll: true
+  },
+  referrers: {
+    table: "referrers",
+    columns: [
+      ["user_id", "user_id", "text"],
+      ["name", "name", "text"],
+      ["handle", "handle", "text"],
+      ["visitors", "visitors", "int"],
+      ["free_subscribers", "free_subscribers", "int"],
+      ["paid_subscribers", "paid_subscribers", "int"]
+    ],
+    required: ["user_id"],
+    replaceAll: true
+  },
+  pub_summary: {
+    table: "pub_summary",
+    columns: [["metric", "metric", "text"], ["value", "value", "text"]],
+    required: ["metric"]
+  }
+};
+function isStatsKind(kind) {
+  return kind in DEFS;
+}
+function convert(raw, how) {
+  switch (how) {
+    case "int":
+      return toInt(raw);
+    case "num":
+      return toNum(raw);
+    case "date":
+      return normDate(raw);
+    default: {
+      const s = (raw ?? "").trim();
+      return s === "" ? null : s;
+    }
+  }
+}
+function loadStatsTable(db, runId, kind, rows) {
+  const def = DEFS[kind];
+  const res = { inserted: 0, updated: 0, skipped: 0 };
+  const names = def.columns.map(([name]) => name);
+  const stmt = db.prepare(
+    `INSERT OR REPLACE INTO ${def.table} (${names.join(", ")}, run_id) VALUES (${names.map(() => "?").join(", ")}, ?)`
+  );
+  return tx2(db, () => {
+    if (def.replaceAll) db.exec(`DELETE FROM ${def.table}`);
+    for (const row of rows) {
+      const values = def.columns.map(([, from, how]) => {
+        const candidates = Array.isArray(from) ? from : [from];
+        for (const c of candidates) {
+          const v = col2(row, c);
+          if (v !== void 0 && v.trim() !== "") return convert(v, how);
+        }
+        return convert(void 0, how);
+      });
+      const missing = def.required.some((name) => {
+        const v = values[names.indexOf(name)];
+        return v === null || v === "";
+      });
+      if (missing) {
+        res.skipped++;
+        continue;
+      }
+      stmt.run(...values, runId);
+      res.inserted++;
+    }
+    return res;
+  });
+}
+function loadUnsubscribesDaily(db, runId, rows) {
+  const res = { inserted: 0, updated: 0, skipped: 0 };
+  const stmt = db.prepare(`INSERT INTO subscriber_growth_daily (date, unsubscribes, run_id) VALUES (?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET unsubscribes = excluded.unsubscribes, run_id = excluded.run_id`);
+  return tx2(db, () => {
+    for (const row of rows) {
+      const date = normDate(col2(row, "date"));
+      if (!date) {
+        res.skipped++;
+        continue;
+      }
+      stmt.run(date, toInt(col2(row, "unsubscribes")) ?? 0, runId);
+      res.inserted++;
+    }
+    return res;
+  });
+}
+function deriveFreeGrowth(db, runId) {
+  const rows = db.prepare(
+    // Cuenta a quien hoy es free y también a quien entró gratis y pagó después (su plan empezó
+    // más tarde que su suscripción). Quien llegó pagando desde el primer día no era un alta free.
+    `SELECT substr(subscribed_at, 1, 10) AS date, COUNT(*) AS n
+         FROM subscribers
+        WHERE subscribed_at IS NOT NULL
+          AND (plan = 'free' OR (plan_since IS NOT NULL AND plan_since > subscribed_at))
+        GROUP BY date`
+  ).all();
+  const stmt = db.prepare(`INSERT INTO subscriber_growth_daily (date, new_free, run_id) VALUES (?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET new_free = excluded.new_free, run_id = excluded.run_id`);
+  return tx2(db, () => {
+    for (const r of rows) if (r.date) stmt.run(r.date, r.n, runId);
+    return rows.length;
+  });
+}
+
 // src/load/notes.ts
 function loadNotes(db, runId, bundle) {
   const res = { inserted: 0, updated: 0, skipped: 0 };
@@ -5568,7 +6295,13 @@ function loadNotes(db, runId, bundle) {
       is_subscribed=COALESCE(excluded.is_subscribed, note_actors.is_subscribed),
       is_following=COALESCE(excluded.is_following, note_actors.is_following),
       bestseller_tier=COALESCE(excluded.bestseller_tier, note_actors.bestseller_tier), last_seen_at=excluded.last_seen_at`);
-  const delInter = db.prepare("DELETE FROM note_interactions WHERE note_id = ?");
+  const delKind = db.prepare("DELETE FROM note_interactions WHERE note_id = ? AND kind = ?");
+  const upNotePartial = db.prepare(`INSERT INTO notes
+      (note_id, user_id, date, body, reaction_count, restacks, replies_count, attachments, stats, stats_updated_at, last_synced_run_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(note_id) DO UPDATE SET date=excluded.date, body=excluded.body, attachments=excluded.attachments,
+      stats=COALESCE(excluded.stats, notes.stats), stats_updated_at=COALESCE(excluded.stats_updated_at, notes.stats_updated_at),
+      last_synced_run_id=excluded.last_synced_run_id`);
   const insInter = db.prepare(`INSERT OR REPLACE INTO note_interactions
       (note_id, actor_user_id, kind, reply_id, created_at, body, reaction_count, run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
   const exists = db.prepare("SELECT 1 FROM notes WHERE note_id = ?");
@@ -5584,7 +6317,9 @@ function loadNotes(db, runId, bundle) {
         continue;
       }
       const had = !!exists.get(n.id);
-      upNote.run(
+      const failed = new Set(n.failed ?? []);
+      const stmt = failed.size ? upNotePartial : upNote;
+      stmt.run(
         n.id,
         n.user_id,
         n.date,
@@ -5597,18 +6332,26 @@ function loadNotes(db, runId, bundle) {
         n.stats ? bundle.fetched_at : null,
         runId
       );
-      delInter.run(n.id);
-      for (const a of n.reactors.filter(valid)) {
-        actor(a);
-        insInter.run(n.id, a.id, "like", 0, null, null, null, runId);
+      if (!failed.has("reactors")) {
+        delKind.run(n.id, "like");
+        for (const a of n.reactors.filter(valid)) {
+          actor(a);
+          insInter.run(n.id, a.id, "like", 0, null, null, null, runId);
+        }
       }
-      for (const a of n.restackers.filter(valid)) {
-        actor(a);
-        insInter.run(n.id, a.id, "restack", 0, null, null, null, runId);
+      if (!failed.has("restackers")) {
+        delKind.run(n.id, "restack");
+        for (const a of n.restackers.filter(valid)) {
+          actor(a);
+          insInter.run(n.id, a.id, "restack", 0, null, null, null, runId);
+        }
       }
-      for (const r of n.replies.filter((r2) => valid(r2.actor))) {
-        actor(r.actor);
-        insInter.run(n.id, r.actor.id, "reply", r.id, r.date, r.body, r.reaction_count, runId);
+      if (!failed.has("replies")) {
+        delKind.run(n.id, "reply");
+        for (const r of n.replies.filter((r2) => valid(r2.actor))) {
+          actor(r.actor);
+          insInter.run(n.id, r.actor.id, "reply", r.id, r.date, r.body, r.reaction_count, runId);
+        }
       }
       had ? res.updated++ : res.inserted++;
     }
@@ -5681,6 +6424,15 @@ var ORDER = [
   "free_subscriber_growth",
   "paid_subscriber_growth",
   "subscriber_totals",
+  "followers",
+  "unsubscribes",
+  "unsubscribes_daily",
+  "visitor_sources",
+  "network_attribution",
+  "audience_location",
+  "audience_overlap",
+  "referrers",
+  "pub_summary",
   "unknown"
 ];
 function loadCsvPaths(db, runId, paths, insRaw) {
@@ -5725,7 +6477,14 @@ function loadCsvPaths(db, runId, paths, insRaw) {
           case "subscriber_totals":
             rep.result = loadSubscriberTotals(db, runId, f.rows);
             break;
+          case "unsubscribes_daily":
+            rep.result = loadUnsubscribesDaily(db, runId, f.rows);
+            break;
           default:
+            if (isStatsKind(f.kind)) {
+              rep.result = loadStatsTable(db, runId, f.kind, f.rows);
+              break;
+            }
             rep.error = "cabeceras no reconocidas; archivo registrado pero no cargado";
         }
       } catch (e) {
@@ -5741,6 +6500,7 @@ function loadDirectory(db, dir) {
   const insRaw = db.prepare("INSERT INTO raw_files (run_id, kind, path, sha256, row_count) VALUES (?, ?, ?, ?, ?)");
   const files = loadCsvPaths(db, runId, collectCsvPaths(dir), insRaw);
   loadJsonBundles(db, runId, dir, files, insRaw);
+  if (files.some((f) => f.kind === "email_list" && f.result)) deriveFreeGrowth(db, runId);
   const loaded = files.filter((f) => f.result).length;
   const failed = files.filter((f) => f.error && f.kind !== "unknown").length;
   const status = loaded === 0 ? "failed" : failed > 0 ? "partial" : "ok";
@@ -5755,15 +6515,30 @@ var import_node_path3 = require("node:path");
 
 // src/ingest/endpoints.ts
 var EMAIL_STATS_COLUMNS = [
+  "post_id",
   "title",
   "post_date",
   "audience",
+  "type",
+  "sent",
+  "delivered",
+  "opens",
+  "opened",
+  "open_rate",
+  "clicks",
+  "clicked",
+  "click_through_rate",
+  "likes",
+  "comments",
+  "shares",
+  "restacks",
+  "unsubscribes",
+  "subscribers_finished_post",
   "views",
   "engagement_rate",
   "signups",
   "subscribes",
-  "estimated_value",
-  "open_rate"
+  "estimated_value"
 ];
 var SUBSCRIBER_EXPORT_COLUMNS = [
   "user_email_address",
@@ -5812,12 +6587,38 @@ var SUBSCRIBER_EXPORT_COLUMNS = [
   "group_membership"
 ];
 var SUBSCRIBER_SET_QUERY = { order_by_desc_nulls_last: "subscription_created_at" };
+var LIST_PAGE = 20;
+var WIDE_LIST_PAGE = 50;
 var PUB = {
   emailStats: () => `/api/v1/publication/stats/email_stats?format=csv&${EMAIL_STATS_COLUMNS.map((c) => `columns%5B%5D=${c}`).join("&")}`,
-  traffic: (from, to) => `/api/v1/publication/stats/publication_traffic/timeseries?from=${from}&to=${to}&format=csv`,
+  /**
+   * `resolution=day` es lo que conserva el detalle diario: sin él Substack agrega por mes en
+   * cuanto el rango pasa de unos meses, y había que trocear el rango en 11 peticiones.
+   */
+  traffic: (from, to) => `/api/v1/publication/stats/publication_traffic/timeseries?from=${from}&to=${to}&format=csv&resolution=day`,
   growthSources: (from, to) => `/api/v1/publication/stats/growth/sources?from_date=${from}&to_date=${to}&format=csv`,
   paidSubscriberGrowth: (from, to) => `/api/v1/publication/stats/paid_subscriber_growth?start=${from}&end=${to}&period=day&format=csv`,
   subscriberTotals: (from) => `/api/v1/publication/stats/emails/timeseries?from=${from}T00:00:00.000Z&format=csv&resolution=day`,
+  /** Serie diaria de seguidores (quien sigue la publicación sin suscribirse). Llega sin cabecera. */
+  followers: (from) => `/api/v1/publication/stats/followers/timeseries?from=${from}T00:00:00.000Z&format=csv`,
+  /** Bajas con su fecha real. JSON paginado de 20 en 20; trae `total`. */
+  unsubscribes: (from, to, offset = 0) => `/api/v1/publication/stats/unsubscribes?offset=${offset}&limit=${LIST_PAGE}&from=${from}&to=${to}&order_by=unsubscribed_at&order_direction=desc`,
+  /** Serie diaria de bajas: la única fuente de bajas por día que expone el panel. */
+  unsubscribesDaily: (from, to) => `/api/v1/publication/stats/unsubscribes/timeseries?from=${from}&to=${to}&granularity=day`,
+  /** Fuentes de visita agregadas del rango, con altas por fuente. */
+  visitorSources: (from, to) => `/api/v1/publication/stats/visitor_sources?from_date=${from}&to_date=${to}&offset=0&limit=${WIDE_LIST_PAGE}&order_by=views&order_direction=desc&format=csv`,
+  /** Cuánto del crecimiento viene de la red de Substack y cuánto de fuera. */
+  networkAttribution: (window = "90 days") => `/api/v1/publication/stats/network_attribution?time_window=${encodeURIComponent(window)}&is_subscribed=false`,
+  audienceLocation: () => `/api/v1/publication/stats/audience_insights/location?metric=free+signups&granularity=global`,
+  /** Publicaciones con audiencia solapada: los mejores candidatos a recomendación cruzada. */
+  audienceOverlap: (limit = 12) => `/api/v1/publication/stats/audience_insights/overlap?limit=${limit}`,
+  /** Quién te trae lectores. */
+  readerReferrals: (to, offset = 0) => `/api/v1/publication/stats/reader-referrals?to=${encodeURIComponent(`${to}T23:59:59Z`)}&offset=${offset}&limit=${LIST_PAGE}&order_by=visitors&order_direction=desc`,
+  referralsSummary: () => `/api/v1/publication/stats/referrals/summary`,
+  retentionSummary: () => `/api/v1/publication/stats/subscriber_retention/summary?is_subscribed=true&subscription_interval_cohort=all`,
+  paidGrowthSummary: () => `/api/v1/publication/stats/paid_subscriber_growth/summary?is_subscribed=true`,
+  openRate30d: () => `/api/v1/publication/stats/email_stats/30d_open_rate`,
+  views30d: () => `/api/v1/publication/stats/publication_traffic/30d_views`,
   archive: (offset, limit = 50) => `/api/v1/archive?sort=new&limit=${limit}&offset=${offset}`,
   subscriberSet: () => `/api/v1/subscriber_set`,
   subscriberExport: () => `/api/v1/subscriber_set/export`,
@@ -5842,16 +6643,12 @@ var SOCIAL_ORIGIN = "https://substack.com";
 var pubOrigin = (subdomain) => `https://${subdomain}.substack.com`;
 var DEFAULT_FROM = "2024-01-01";
 var today = () => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-function dateChunks(from, to, days) {
-  const out = [];
-  let a = /* @__PURE__ */ new Date(from + "T00:00:00Z");
-  const end = /* @__PURE__ */ new Date(to + "T00:00:00Z");
-  while (a <= end) {
-    const b = new Date(Math.min(a.getTime() + (days - 1) * 864e5, end.getTime()));
-    out.push([a.toISOString().slice(0, 10), b.toISOString().slice(0, 10)]);
-    a = new Date(b.getTime() + 864e5);
-  }
-  return out;
+function rowsToCsv(header, rows) {
+  const cell = (v) => {
+    const s = v === null || v === void 0 ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return [header.join(","), ...rows.map((r) => r.map(cell).join(","))].join("\n") + "\n";
 }
 
 // src/ingest/notes.ts
@@ -5980,6 +6777,7 @@ async function collectNotes(client, opts = {}) {
           await fn();
         } catch (e) {
           bundle.errors.push({ note_id: id, step: name, error: e instanceof Error ? e.message : String(e) });
+          (rec.failed ??= []).push(name);
         }
       };
       if (rec.reaction_count > 0)
@@ -6014,7 +6812,14 @@ function slimAttachment(a) {
 }
 
 // src/ingest/substack.ts
-var DEFAULT_DELAYS = { retryBaseMs: 1500, pollMs: 2e3, pauseMs: 250 };
+var DEFAULT_DELAYS = { retryBaseMs: 1500, pollMs: 2e3, pauseMs: 250, timeoutMs: 6e4 };
+function isSubstack(url) {
+  try {
+    return new URL(url).hostname.endsWith("substack.com");
+  } catch {
+    return false;
+  }
+}
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 var SessionExpiredError = class extends Error {
 };
@@ -6032,36 +6837,87 @@ var SubstackClient = class {
   base;
   fetchImpl;
   delays;
-  headers(extra = {}) {
-    return { "user-agent": UA, cookie: this.cookie, referer: `${this.base}/publish/home`, ...extra };
+  /**
+   * La cookie de sesión solo viaja a Substack. El export de suscriptores se descarga de una URL
+   * firmada de S3, y mandarle la sesión allí sería regalar la cuenta a un tercero sin necesidad:
+   * la firma ya autoriza esa descarga.
+   */
+  headers(extra = {}, url = this.base) {
+    const h = { "user-agent": UA, ...extra };
+    if (isSubstack(url)) {
+      h.cookie = this.cookie;
+      h.referer = `${this.base}/publish/home`;
+    }
+    return h;
   }
-  /** GET con reintentos ante 5xx (503 esporádicos) y 429 (rate limit, con Retry-After si viene). */
-  async get(path, accept = "*/*", attempts = 5) {
-    const url = path.startsWith("http") ? path : this.base + path;
+  /**
+   * Una petición con timeout. Sin él, una conexión colgada bloquea el sync hasta que caduca el
+   * candado, quince minutos después.
+   */
+  async once(url, init) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), this.delays.timeoutMs);
+    try {
+      return await this.fetchImpl(url, { ...init, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  /**
+   * Reintentos ante 5xx (503 esporádicos), 429 (con Retry-After si viene) y errores de red:
+   * un ECONNRESET a mitad de sync es tan transitorio como un 503 y antes tumbaba el paso entero.
+   */
+  async request(url, init, what, attempts = 5) {
     let last;
+    let lastErr;
     for (let i = 0; i < attempts; i++) {
       if (this.delays.pauseMs) await sleep(this.delays.pauseMs);
-      const res = await this.fetchImpl(url, { headers: this.headers({ accept }), redirect: "follow" });
-      if (res.status === 401 || res.status === 403 || res.url.includes("/sign-in")) throw new SessionExpiredError(`HTTP ${res.status} en ${path}`);
+      let res;
+      try {
+        res = await this.once(url, init);
+      } catch (e) {
+        lastErr = e;
+        last = void 0;
+        const wait2 = this.delays.retryBaseMs * (i + 1);
+        this.log(`  red en ${what} (${e instanceof Error ? e.message : String(e)}) \u2014 reintento en ${wait2}ms`);
+        await sleep(wait2);
+        continue;
+      }
+      if (res.status === 401 || res.status === 403 || res.url.includes("/sign-in")) {
+        throw new SessionExpiredError(`HTTP ${res.status} en ${what}`);
+      }
       if (res.ok) return res;
       last = res;
       if (res.status !== 429 && res.status < 500) break;
       const retryAfter = Number(res.headers.get("retry-after")) * 1e3;
       const wait = res.status === 429 ? Math.max(retryAfter || 0, this.delays.retryBaseMs * 2 ** (i + 1)) : this.delays.retryBaseMs * (i + 1);
-      this.log(`  ${res.status} en ${path.replace(/^https?:\/\/[^/]+/, "")} \u2014 reintento en ${wait}ms`);
+      this.log(`  ${res.status} en ${what} \u2014 reintento en ${wait}ms`);
       await sleep(wait);
     }
-    throw new Error(`HTTP ${last?.status} en ${path}`);
+    if (last) throw new Error(`HTTP ${last.status} en ${what}`);
+    throw new Error(`sin respuesta en ${what}: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+  }
+  async get(path, accept = "*/*", attempts = 5) {
+    const url = path.startsWith("http") ? path : this.base + path;
+    const what = path.replace(/^https?:\/\/[^/]+/, "").slice(0, 120);
+    return this.request(url, { headers: this.headers({ accept }, url), redirect: "follow" }, what, attempts);
+  }
+  /** JSON ya parseado, con los mismos reintentos que `get`. */
+  async getJson(path) {
+    return await (await this.get(path, "application/json")).json();
   }
   async postJson(path, body) {
-    const res = await this.fetchImpl(this.base + path, {
-      method: "POST",
-      headers: this.headers({ "content-type": "application/json", accept: "application/json" }),
-      body: JSON.stringify(body)
-    });
-    if (res.status === 401 || res.status === 403) throw new SessionExpiredError(`HTTP ${res.status} en ${path}`);
+    const url = this.base + path;
+    const res = await this.request(
+      url,
+      {
+        method: "POST",
+        headers: this.headers({ "content-type": "application/json", accept: "application/json" }, url),
+        body: JSON.stringify(body)
+      },
+      path
+    );
     const text = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status} en ${path}: ${text.slice(0, 300)}`);
     return JSON.parse(text);
   }
   async csv(path) {
@@ -6072,19 +6928,143 @@ var SubstackClient = class {
   emailStats() {
     return this.csv(PUB.emailStats());
   }
-  /** Substack agrega por mes si el rango es amplio; se pide en tramos de 90 días para conservar el detalle diario. */
-  async traffic(from = DEFAULT_FROM, to = today()) {
-    let header = "";
-    const lines = [];
-    for (const [a, b] of dateChunks(from, to, 90)) {
-      const text = await this.csv(PUB.traffic(a, b));
-      const [h, ...rows] = text.trim().split(/\r?\n/);
-      header ||= h;
-      lines.push(...rows.filter(Boolean));
-    }
-    return `${header}
-${lines.join("\n")}
+  /**
+   * Una sola petición: `resolution=day` conserva el detalle diario en cualquier rango. Sin ese
+   * parámetro Substack agrega por mes y había que trocear en 11 peticiones.
+   */
+  traffic(from = DEFAULT_FROM, to = today()) {
+    return this.csv(PUB.traffic(from, to));
+  }
+  /** Serie diaria de seguidores. Llega sin cabecera, como la de suscriptores totales. */
+  async followers(from = DEFAULT_FROM) {
+    const body = await this.csv(PUB.followers(from));
+    return `date,followers
+${body.trim()}
 `;
+  }
+  /** Bajas con fecha real, paginadas de 20 en 20. */
+  async unsubscribes(from = DEFAULT_FROM, to = today()) {
+    const rows = [];
+    for (let offset = 0; offset < 5e3; offset += LIST_PAGE) {
+      const page = await this.getJson(
+        PUB.unsubscribes(from, to, offset)
+      );
+      const got = page.rows ?? [];
+      rows.push(...got);
+      if (got.length < LIST_PAGE) break;
+    }
+    const header = ["email", "unsubscribed_at", "subscribed_at", "plan", "source", "name"];
+    return rowsToCsv(
+      header,
+      rows.map((r) => [
+        str(r.email ?? r.user_email_address ?? r.user?.email),
+        str(r.unsubscribed_at ?? r.unsubscribedAt ?? r.date),
+        str(r.subscription_created_at ?? r.subscribed_at ?? r.created_at),
+        str(r.type ?? r.subscription_type ?? r.plan),
+        str(r.free_attribution ?? r.source),
+        str(r.name ?? r.user?.name)
+      ])
+    );
+  }
+  /** Serie diaria de bajas. Es la única fuente de bajas por día que expone el panel. */
+  async unsubscribesDaily(from = DEFAULT_FROM, to = today()) {
+    const data = await this.getJson(PUB.unsubscribesDaily(from, to));
+    const rows = data.rows ?? [];
+    return rowsToCsv(
+      ["date", "unsubscribes"],
+      rows.map(
+        (r) => Array.isArray(r) ? [str(r[0]), Number(r[1]) || 0] : [str(r.date ?? r.dt), Number(r.count ?? r.value ?? r.unsubscribes) || 0]
+      )
+    );
+  }
+  visitorSources(from = DEFAULT_FROM, to = today()) {
+    return this.csv(PUB.visitorSources(from, to));
+  }
+  /** De dónde viene la audiencia: red de Substack, cuentas existentes, importados, fuera. */
+  async networkAttribution() {
+    const data = await this.getJson(PUB.networkAttribution());
+    return rowsToCsv(
+      ["label", "time_window", "subscribers", "pct_of_total"],
+      (data.rows ?? []).map((r) => [str(r.label), str(r.time_window), Number(r.subs_count) || 0, Number(r.pct_time_window_total) || 0])
+    );
+  }
+  async audienceLocation() {
+    const data = await this.getJson(PUB.audienceLocation());
+    return rowsToCsv(
+      ["location", "metric", "value"],
+      (Array.isArray(data) ? data : []).map((r) => [str(r.location), str(r.metric), Number(r.value) || 0])
+    );
+  }
+  /**
+   * Publicaciones con audiencia solapada. La respuesta trae el objeto entero de cada publicación
+   * (130 KB para doce filas); aquí se queda en lo que se consulta.
+   */
+  async audienceOverlap() {
+    const data = await this.getJson(PUB.audienceOverlap());
+    return rowsToCsv(
+      ["subdomain", "name", "percent_overlap", "author"],
+      (Array.isArray(data) ? data : []).map((r) => [
+        str(r.pub?.subdomain),
+        str(r.pub?.name),
+        Number(r.percentOverlap) || 0,
+        str(r.pub?.author_name)
+      ])
+    );
+  }
+  /** Quién te trae lectores. */
+  async readerReferrals(to = today()) {
+    const rows = [];
+    for (let offset = 0; offset < 1e3; offset += LIST_PAGE) {
+      const page = await this.getJson(PUB.readerReferrals(to, offset));
+      const got = page.rows ?? [];
+      rows.push(...got);
+      if (got.length < LIST_PAGE) break;
+    }
+    return rowsToCsv(
+      ["user_id", "name", "handle", "visitors", "free_subscribers", "paid_subscribers"],
+      rows.map((r) => {
+        const u = r.user ?? {};
+        return [
+          str(r.referrer_user_id ?? u.id),
+          str(u.name),
+          str(u.handle),
+          Number(r.visitors) || 0,
+          Number(r.free_subscribers) || 0,
+          Number(r.paid_subscribers) || 0
+        ];
+      })
+    );
+  }
+  /**
+   * Las cifras sueltas del panel (retención, referidos, crecimiento de pago, apertura y visitas
+   * de 30 días) en una tabla clave/valor: son cinco peticiones diminutas y un solo archivo.
+   */
+  async summaries() {
+    const out = [];
+    const add = (prefix, obj) => {
+      if (!obj || typeof obj !== "object") return;
+      for (const [k, v] of Object.entries(obj)) {
+        if (v === null || typeof v === "object") continue;
+        out.push([`${prefix}.${k}`, String(v)]);
+      }
+    };
+    const tasks = [
+      ["retention", PUB.retentionSummary()],
+      ["referrals", PUB.referralsSummary()],
+      ["paid_growth", PUB.paidGrowthSummary()],
+      ["open_rate_30d", PUB.openRate30d()],
+      ["views_30d", PUB.views30d()]
+    ];
+    for (const [prefix, path] of tasks) {
+      try {
+        const data = await this.getJson(path);
+        add(prefix, prefix === "retention" ? data.heroStat ?? data : data);
+      } catch (e) {
+        if (e instanceof SessionExpiredError) throw e;
+        this.log(`  \u2717 resumen ${prefix}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return rowsToCsv(["metric", "value"], out);
   }
   growthSources(from = DEFAULT_FROM, to = today()) {
     return this.csv(PUB.growthSources(from, to));
@@ -6099,8 +7079,12 @@ ${lines.join("\n")}
 ${body.trim()}
 `;
   }
-  /** Export completo de suscriptores: crea un set, pide el export, sondea hasta tener URL y descarga. */
-  async subscriberExport(maxPolls = 60) {
+  /**
+   * Pide el export de suscriptores y devuelve por dónde recogerlo, sin esperar a que se genere.
+   * Substack tarda decenas de segundos en prepararlo; arrancarlo antes que las demás descargas
+   * y recogerlo al final convierte esa espera en tiempo aprovechado.
+   */
+  async startSubscriberExport() {
     const set = await this.postJson(PUB.subscriberSet(), { query: SUBSCRIBER_SET_QUERY });
     if (!set?.id) throw new Error(`subscriber_set sin id: ${JSON.stringify(set).slice(0, 200)}`);
     const exp = await this.postJson(PUB.subscriberExport(), {
@@ -6108,9 +7092,16 @@ ${body.trim()}
       columns: [...SUBSCRIBER_EXPORT_COLUMNS]
     });
     const exportId = exp.id ?? exp.exportId ?? exp.export_id;
-    let fileUrl = exp.url;
+    const url = exp.url;
+    if (!url && !exportId) throw new Error(`export sin id ni url: ${JSON.stringify(exp).slice(0, 200)}`);
+    return { exportId, url };
+  }
+  /** Export completo de suscriptores: crea un set, pide el export, sondea hasta tener URL y descarga. */
+  async subscriberExport(maxPolls = 60, pedido) {
+    const { exportId, url } = pedido ?? await this.startSubscriberExport();
+    let fileUrl = url;
     if (!fileUrl) {
-      if (!exportId) throw new Error(`export sin id ni url: ${JSON.stringify(exp).slice(0, 200)}`);
+      if (!exportId) throw new Error("el export de suscriptores no devolvi\xF3 ni id ni url");
       for (let i = 0; i < maxPolls && !fileUrl; i++) {
         await sleep(this.delays.pollMs);
         const res = await this.fetchImpl(this.base + PUB.subscriberExportStatus(exportId), {
@@ -6156,6 +7147,9 @@ ${body.trim()}
 function csvCell(v) {
   return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
+function str(v) {
+  return v === null || v === void 0 ? "" : String(v);
+}
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -6166,14 +7160,33 @@ async function ingestSubstack(opts) {
   const client = new SubstackClient(opts.subdomain, opts.cookie, log, opts.fetchImpl, opts.delays);
   const desde = opts.seriesFrom ?? DEFAULT_FROM;
   const report = { rawDir: opts.rawDir, downloaded: [], failed: [], sessionExpired: false };
+  let pedido;
+  try {
+    pedido = await client.startSubscriberExport();
+    log("\u2192 email_list (encargado; se recoge al final)");
+  } catch (e) {
+    log(`  encargo del export fall\xF3, se reintentar\xE1 al final: ${e instanceof Error ? e.message : String(e)}`);
+  }
   const steps = [
-    { kind: "email_list", file: "email_list.csv", run: () => client.subscriberExport() },
     { kind: "posts", file: "posts.csv", run: () => client.postsCsv() },
     { kind: "email_stats", file: "email_stats.csv", run: () => client.emailStats() },
     { kind: "growth_sources", file: "growth_sources.csv", run: () => client.growthSources(desde) },
     { kind: "traffic", file: "traffic.csv", run: () => client.traffic(desde) },
     { kind: "paid_subscriber_growth", file: "paid_subscriber_growth.csv", run: () => client.paidSubscriberGrowth(desde) },
     { kind: "subscriber_totals", file: "subscriber_totals.csv", run: () => client.subscriberTotals(desde) },
+    { kind: "followers", file: "followers.csv", run: () => client.followers(desde) },
+    { kind: "unsubscribes", file: "unsubscribes.csv", run: () => client.unsubscribes(desde) },
+    { kind: "unsubscribes_daily", file: "unsubscribes_daily.csv", run: () => client.unsubscribesDaily(desde) },
+    // Esta es una foto agregada que se reemplaza entera en cada sync, no una serie que se acumula.
+    // Por eso pide siempre el rango completo: si en incremental cubriera solo 120 días, la tabla
+    // significaría una cosa después de un `--full` y otra distinta después de un sync normal.
+    { kind: "visitor_sources", file: "visitor_sources.csv", run: () => client.visitorSources(DEFAULT_FROM) },
+    { kind: "network_attribution", file: "network_attribution.csv", run: () => client.networkAttribution() },
+    { kind: "audience_location", file: "audience_location.csv", run: () => client.audienceLocation() },
+    { kind: "audience_overlap", file: "audience_overlap.csv", run: () => client.audienceOverlap() },
+    { kind: "referrers", file: "referrers.csv", run: () => client.readerReferrals() },
+    { kind: "pub_summary", file: "pub_summary.csv", run: () => client.summaries() },
+    { kind: "email_list", file: "email_list.csv", run: () => client.subscriberExport(60, pedido) },
     {
       kind: "notes",
       file: "notes.json",
@@ -6194,7 +7207,7 @@ async function ingestSubstack(opts) {
       log(`\u2192 ${step.kind}`);
       const text = await step.run();
       log(`  ${step.kind}: ${((Date.now() - t0) / 1e3).toFixed(1)}s`);
-      if (!step.file.endsWith(".json") && text.trim().split(/\r?\n/).length < 2) throw new Error("respuesta vac\xEDa");
+      if (!step.file.endsWith(".json") && !text.trim()) throw new Error("respuesta vac\xEDa");
       const path = (0, import_node_path3.join)(opts.rawDir, step.file);
       (0, import_node_fs4.writeFileSync)(path, text, "utf8");
       report.downloaded.push({ kind: step.kind, path, bytes: Buffer.byteLength(text) });
@@ -6239,17 +7252,24 @@ function saveAuth(path, cookie) {
 init_queries();
 var UsageError = class extends Error {
 };
-var str = (f, name) => {
+var str2 = (f, name) => {
   const v = f[name];
   if (v === void 0) return void 0;
   if (typeof v === "boolean") throw new UsageError(`--${name} necesita un valor`);
   return v;
 };
 var int = (f, name, fallback) => {
-  const v = str(f, name);
+  const v = str2(f, name);
   if (v === void 0) return fallback;
   const n = Number(v);
   if (!Number.isInteger(n)) throw new UsageError(`--${name} debe ser un entero, no ${JSON.stringify(v)}`);
+  return n;
+};
+var num = (f, name, fallback) => {
+  const v = str2(f, name);
+  if (v === void 0) return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new UsageError(`--${name} debe ser un n\xFAmero, no ${JSON.stringify(v)}`);
   return n;
 };
 var bool2 = (f, name) => {
@@ -6261,7 +7281,7 @@ var bool2 = (f, name) => {
   throw new UsageError(`--${name} debe ser true o false`);
 };
 var enumFlag = (f, name, allowed, fallback) => {
-  const v = str(f, name);
+  const v = str2(f, name);
   if (v === void 0) return fallback;
   if (!allowed.includes(v)) {
     throw new UsageError(`--${name} debe ser uno de: ${allowed.join(", ")}`);
@@ -6269,7 +7289,7 @@ var enumFlag = (f, name, allowed, fallback) => {
   return v;
 };
 var dateFlag = (f, name) => {
-  const v = str(f, name);
+  const v = str2(f, name);
   if (v === void 0) return void 0;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
   const d = m && /* @__PURE__ */ new Date(`${v}T00:00:00Z`);
@@ -6278,25 +7298,27 @@ var dateFlag = (f, name) => {
   }
   return v;
 };
-var POST_SORTS = ["open_rate", "views", "subscribes", "signups", "post_date"];
-var PLANS = ["free", "paid", "monthly", "yearly"];
+var POST_SORTS = Object.keys(POST_SORT_COLUMNS);
+var PLANS = ["free", "paid", "other", "monthly", "yearly", "founding", "author", "comp", "gift"];
 var NOTE_SORTS = ["date", "reactions", "restacks", "replies", "interactions"];
 var GROUPS = ["day", "week", "month", "source"];
+var SERIES_GROUPS = ["day", "week", "month"];
 var KINDS = ["like", "restack", "reply"];
+var RANGE_HELP = "(--from y --to incluyen el d\xEDa entero en ambos extremos)";
 var QUERIES = {
   overview: {
-    summary: "Totales de suscriptores, reparto por plan, altas 30/90d y \xFAltimo sync. Empieza por aqu\xED.",
+    summary: "Totales (free / paid real / other), reparto por plan, altas 30/90d por tres or\xEDgenes distintos y \xFAltimo sync. Empieza por aqu\xED.",
     run: (db) => getOverview(db)
   },
   subscribers: {
-    summary: "Lista contactos con filtros.",
-    flags: "--plan free|paid|monthly|yearly --active true|false --after YYYY-MM-DD --before YYYY-MM-DD --email texto --limit N --offset N",
+    summary: "Lista contactos con filtros. `paid` = planes que cobran; `other` = author/comp/gift.",
+    flags: `--plan ${PLANS.join("|")} --active true|false --after YYYY-MM-DD --before YYYY-MM-DD --email texto --limit N --offset N ${RANGE_HELP.replace("--from y --to", "--after y --before")}`,
     run: (db, f) => listSubscribers(db, {
       plan: f.plan === void 0 ? void 0 : enumFlag(f, "plan", PLANS, "free"),
       is_active: bool2(f, "active"),
       subscribed_after: dateFlag(f, "after"),
       subscribed_before: dateFlag(f, "before"),
-      email_contains: str(f, "email"),
+      email_contains: str2(f, "email"),
       limit: int(f, "limit", 50),
       offset: int(f, "offset", 0)
     })
@@ -6305,30 +7327,75 @@ var QUERIES = {
     summary: "Ficha de un contacto por email, con su historial de plan en cada sync.",
     flags: "--email alguien@ejemplo.com",
     run: (db, f) => {
-      const email = str(f, "email");
+      const email = str2(f, "email");
       if (!email) throw new UsageError("subscriber necesita --email");
       return getSubscriber(db, email) ?? { error: "No existe ese email en la base." };
     }
   },
   candidates: {
-    summary: "Free activos ordenados como candidatos a pago por engagement real (activity, aperturas 30d).",
+    summary: "Free activos puntuados como candidatos a pago con las se\xF1ales que la base tiene (activity, aperturas \xFAnicas, clics, comentarios, shares, penalizaci\xF3n por apertura antigua). `method` dice cu\xE1les se usaron.",
     flags: "--limit N --min-days N",
     run: (db, f) => findUpgradeCandidates(db, int(f, "limit", 50), int(f, "min-days", 14))
   },
   posts: {
-    summary: "Posts con views, open_rate, signups y subscribes.",
-    flags: `--sort ${POST_SORTS.join("|")} --limit N`,
-    run: (db, f) => getPostPerformance(db, enumFlag(f, "sort", POST_SORTS, "post_date"), int(f, "limit", 50))
+    summary: "Posts con views, open_rate, env\xEDos, clics, likes, comentarios, bajas y ratios por mil visitas.",
+    flags: `--sort ${POST_SORTS.join("|")} --limit N --from YYYY-MM-DD --to YYYY-MM-DD ${RANGE_HELP}`,
+    run: (db, f) => getPostPerformance(db, enumFlag(f, "sort", POST_SORTS, "post_date"), int(f, "limit", 50), dateFlag(f, "from"), dateFlag(f, "to"))
+  },
+  post: {
+    summary: "Ficha de un post con todas sus m\xE9tricas y c\xF3mo han cambiado entre syncs.",
+    flags: "--id <post_id> | --slug <slug>",
+    run: (db, f) => {
+      const id = str2(f, "id");
+      const slug = str2(f, "slug");
+      if (!id && !slug) throw new UsageError("post necesita --id o --slug");
+      return getPost(db, { id, slug }) ?? { error: "No hay ning\xFAn post con ese id o slug en la base." };
+    }
   },
   growth: {
     summary: "Altas por fuente y series diarias free/paid, agrupadas.",
-    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${GROUPS.join("|")}`,
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${GROUPS.join("|")} ${RANGE_HELP}`,
     run: (db, f) => getGrowth(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", GROUPS, "month"))
+  },
+  series: {
+    summary: "Serie unificada: total de suscriptores, seguidores, visitas, altas free y bajas en una tabla.",
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${SERIES_GROUPS.join("|")} ${RANGE_HELP}`,
+    run: (db, f) => getSeries(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", SERIES_GROUPS, "day"))
   },
   churn: {
     summary: "Bajas y transiciones de plan entre syncs (necesita \u22652 syncs).",
-    flags: "--from YYYY-MM-DD --to YYYY-MM-DD",
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD ${RANGE_HELP}`,
     run: (db, f) => getChurn(db, dateFlag(f, "from"), dateFlag(f, "to"))
+  },
+  readers: {
+    summary: "Activos segmentados por engagement: abre-todo, regular, dormido, nunca-abre, sin-envios.",
+    flags: `--segment ${READER_SEGMENTS.join("|")} --limit N`,
+    run: (db, f) => getReaders(db, f.segment === void 0 ? void 0 : enumFlag(f, "segment", READER_SEGMENTS, "regular"), int(f, "limit", 50))
+  },
+  "at-risk": {
+    summary: "Activos con \u22653 correos recibidos y sin abrir ninguno desde hace tiempo; los de pago primero.",
+    flags: "--days N (60 por defecto) --limit N",
+    run: (db, f) => getAtRisk(db, int(f, "days", 60), int(f, "limit", 50))
+  },
+  "best-time": {
+    summary: "Apertura media y n\xFAmero de posts por d\xEDa de la semana y por hora (de `email_sent_at`, o de `post_date` si falta).",
+    flags: "--tz -4 (desplazamiento en horas sobre UTC) --min-posts N",
+    run: (db, f) => getBestTime(db, int(f, "tz", 0), int(f, "min-posts", 1))
+  },
+  sources: {
+    summary: "Calidad por fuente de captaci\xF3n: activos, activity media, apertura y bajas; m\xE1s las tablas del panel.",
+    flags: "--limit N",
+    run: (db, f) => getSources(db, int(f, "limit", 50))
+  },
+  referrers: {
+    summary: "Qui\xE9n te trae lectores: visitantes y suscriptores por referidor.",
+    flags: "--limit N",
+    run: (db, f) => getReferrers(db, int(f, "limit", 50))
+  },
+  overlap: {
+    summary: "Publicaciones con audiencia solapada, candidatas a recomendaci\xF3n cruzada.",
+    flags: "--limit N --min-percent 0.2 (fracci\xF3n 0-1, no porcentaje)",
+    run: (db, f) => getOverlap(db, int(f, "limit", 50), num(f, "min-percent", 0))
   },
   notes: {
     summary: "Tus Notes con likes, restacks, respuestas y personas \xFAnicas.",
@@ -6503,7 +7570,7 @@ var lockPath = () => (0, import_node_path6.join)(stackchatHome(), "sync.lock");
 var logPath = () => (0, import_node_path6.join)(stackchatHome(), "last-sync.log");
 var LOCK_TTL_MS = 15 * 60 * 1e3;
 function hoursSinceLastSync(db, now = Date.now()) {
-  const row = db.prepare("SELECT finished_at FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").get();
+  const row = db.prepare("SELECT finished_at FROM sync_runs WHERE finished_at IS NOT NULL AND status = 'ok' ORDER BY id DESC LIMIT 1").get();
   if (!row?.finished_at) return null;
   const t = Date.parse(row.finished_at);
   return Number.isFinite(t) ? (now - t) / 36e5 : null;
@@ -6769,6 +7836,10 @@ async function runSync(o) {
   }
   const rep = loadDirectory(o.db, dir);
   printReport(rep, o.log);
+  if (ingest.failed.length && rep.status === "ok") {
+    markRunPartial(o.db, rep.runId, ingest.failed.map((f) => `${f.kind}: ${f.error}`).join("\n"));
+    rep.status = "partial";
+  }
   writeSyncLog(
     `sync #${rep.runId} ${rep.status}${ingest.failed.length ? ` (${ingest.failed.length} fuentes fallaron)` : ""}`
   );

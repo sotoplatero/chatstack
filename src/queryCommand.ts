@@ -32,6 +32,15 @@ const int = (f: Flags, name: string, fallback: number): number => {
   return n;
 };
 
+/** Como `int`, pero admite decimales: `percent_overlap` viene como 0.37, no como 37. */
+const num = (f: Flags, name: string, fallback: number): number => {
+  const v = str(f, name);
+  if (v === undefined) return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new UsageError(`--${name} debe ser un número, no ${JSON.stringify(v)}`);
+  return n;
+};
+
 const bool = (f: Flags, name: string): boolean | undefined => {
   const v = f[name];
   if (v === undefined) return undefined;
@@ -67,20 +76,29 @@ const dateFlag = (f: Flags, name: string): string | undefined => {
   return v;
 };
 
-const POST_SORTS = ["open_rate", "views", "subscribes", "signups", "post_date"] as const;
-const PLANS = ["free", "paid", "monthly", "yearly"] as const;
+const POST_SORTS = Object.keys(q.POST_SORT_COLUMNS) as [string, ...string[]];
+/**
+ * `paid` son solo los planes que cobran; `other` es el resto de no-free (author, comp, gift), que
+ * antes se contaba como pago e inflaba la cifra de ingresos con el propio autor.
+ */
+const PLANS = ["free", "paid", "other", "monthly", "yearly", "founding", "author", "comp", "gift"] as const;
 const NOTE_SORTS = ["date", "reactions", "restacks", "replies", "interactions"] as const;
 const GROUPS = ["day", "week", "month", "source"] as const;
+const SERIES_GROUPS = ["day", "week", "month"] as const;
 const KINDS = ["like", "restack", "reply"] as const;
+
+/** Nota de ayuda repetida: las dos puntas del rango incluyen el día entero, con hora o sin ella. */
+const RANGE_HELP = "(--from y --to incluyen el día entero en ambos extremos)";
 
 export const QUERIES: Record<string, QueryDef> = {
   overview: {
-    summary: "Totales de suscriptores, reparto por plan, altas 30/90d y último sync. Empieza por aquí.",
+    summary:
+      "Totales (free / paid real / other), reparto por plan, altas 30/90d por tres orígenes distintos y último sync. Empieza por aquí.",
     run: (db) => q.getOverview(db),
   },
   subscribers: {
-    summary: "Lista contactos con filtros.",
-    flags: "--plan free|paid|monthly|yearly --active true|false --after YYYY-MM-DD --before YYYY-MM-DD --email texto --limit N --offset N",
+    summary: "Lista contactos con filtros. `paid` = planes que cobran; `other` = author/comp/gift.",
+    flags: `--plan ${PLANS.join("|")} --active true|false --after YYYY-MM-DD --before YYYY-MM-DD --email texto --limit N --offset N ${RANGE_HELP.replace("--from y --to", "--after y --before")}`,
     run: (db, f) =>
       q.listSubscribers(db, {
         plan: f.plan === undefined ? undefined : enumFlag(f, "plan", PLANS, "free"),
@@ -102,24 +120,72 @@ export const QUERIES: Record<string, QueryDef> = {
     },
   },
   candidates: {
-    summary: "Free activos ordenados como candidatos a pago por engagement real (activity, aperturas 30d).",
+    summary:
+      "Free activos puntuados como candidatos a pago con las señales que la base tiene (activity, aperturas únicas, clics, comentarios, shares, penalización por apertura antigua). `method` dice cuáles se usaron.",
     flags: "--limit N --min-days N",
     run: (db, f) => q.findUpgradeCandidates(db, int(f, "limit", 50), int(f, "min-days", 14)),
   },
   posts: {
-    summary: "Posts con views, open_rate, signups y subscribes.",
-    flags: `--sort ${POST_SORTS.join("|")} --limit N`,
-    run: (db, f) => q.getPostPerformance(db, enumFlag(f, "sort", POST_SORTS, "post_date"), int(f, "limit", 50)),
+    summary: "Posts con views, open_rate, envíos, clics, likes, comentarios, bajas y ratios por mil visitas.",
+    flags: `--sort ${POST_SORTS.join("|")} --limit N --from YYYY-MM-DD --to YYYY-MM-DD ${RANGE_HELP}`,
+    run: (db, f) =>
+      q.getPostPerformance(db, enumFlag(f, "sort", POST_SORTS, "post_date"), int(f, "limit", 50), dateFlag(f, "from"), dateFlag(f, "to")),
+  },
+  post: {
+    summary: "Ficha de un post con todas sus métricas y cómo han cambiado entre syncs.",
+    flags: "--id <post_id> | --slug <slug>",
+    run: (db, f) => {
+      const id = str(f, "id");
+      const slug = str(f, "slug");
+      if (!id && !slug) throw new UsageError("post necesita --id o --slug");
+      return q.getPost(db, { id, slug }) ?? { error: "No hay ningún post con ese id o slug en la base." };
+    },
   },
   growth: {
     summary: "Altas por fuente y series diarias free/paid, agrupadas.",
-    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${GROUPS.join("|")}`,
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${GROUPS.join("|")} ${RANGE_HELP}`,
     run: (db, f) => q.getGrowth(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", GROUPS, "month")),
+  },
+  series: {
+    summary: "Serie unificada: total de suscriptores, seguidores, visitas, altas free y bajas en una tabla.",
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${SERIES_GROUPS.join("|")} ${RANGE_HELP}`,
+    run: (db, f) => q.getSeries(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", SERIES_GROUPS, "day")),
   },
   churn: {
     summary: "Bajas y transiciones de plan entre syncs (necesita ≥2 syncs).",
-    flags: "--from YYYY-MM-DD --to YYYY-MM-DD",
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD ${RANGE_HELP}`,
     run: (db, f) => q.getChurn(db, dateFlag(f, "from"), dateFlag(f, "to")),
+  },
+  readers: {
+    summary: "Activos segmentados por engagement: abre-todo, regular, dormido, nunca-abre, sin-envios.",
+    flags: `--segment ${q.READER_SEGMENTS.join("|")} --limit N`,
+    run: (db, f) =>
+      q.getReaders(db, f.segment === undefined ? undefined : enumFlag(f, "segment", q.READER_SEGMENTS, "regular"), int(f, "limit", 50)),
+  },
+  "at-risk": {
+    summary: "Activos con ≥3 correos recibidos y sin abrir ninguno desde hace tiempo; los de pago primero.",
+    flags: "--days N (60 por defecto) --limit N",
+    run: (db, f) => q.getAtRisk(db, int(f, "days", 60), int(f, "limit", 50)),
+  },
+  "best-time": {
+    summary: "Apertura media y número de posts por día de la semana y por hora (de `email_sent_at`, o de `post_date` si falta).",
+    flags: "--tz -4 (desplazamiento en horas sobre UTC) --min-posts N",
+    run: (db, f) => q.getBestTime(db, int(f, "tz", 0), int(f, "min-posts", 1)),
+  },
+  sources: {
+    summary: "Calidad por fuente de captación: activos, activity media, apertura y bajas; más las tablas del panel.",
+    flags: "--limit N",
+    run: (db, f) => q.getSources(db, int(f, "limit", 50)),
+  },
+  referrers: {
+    summary: "Quién te trae lectores: visitantes y suscriptores por referidor.",
+    flags: "--limit N",
+    run: (db, f) => q.getReferrers(db, int(f, "limit", 50)),
+  },
+  overlap: {
+    summary: "Publicaciones con audiencia solapada, candidatas a recomendación cruzada.",
+    flags: "--limit N --min-percent 0.2 (fracción 0-1, no porcentaje)",
+    run: (db, f) => q.getOverlap(db, int(f, "limit", 50), num(f, "min-percent", 0)),
   },
   notes: {
     summary: "Tus Notes con likes, restacks, respuestas y personas únicas.",
