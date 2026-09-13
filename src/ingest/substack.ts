@@ -340,8 +340,12 @@ export class SubstackClient {
     return `date,total_subscribers\n${body.trim()}\n`;
   }
 
-  /** Export completo de suscriptores: crea un set, pide el export, sondea hasta tener URL y descarga. */
-  async subscriberExport(maxPolls = 60): Promise<string> {
+  /**
+   * Pide el export de suscriptores y devuelve por dónde recogerlo, sin esperar a que se genere.
+   * Substack tarda decenas de segundos en prepararlo; arrancarlo antes que las demás descargas
+   * y recogerlo al final convierte esa espera en tiempo aprovechado.
+   */
+  async startSubscriberExport(): Promise<{ exportId?: string; url?: string }> {
     const set = await this.postJson<{ id: number }>(PUB.subscriberSet(), { query: SUBSCRIBER_SET_QUERY });
     if (!set?.id) throw new Error(`subscriber_set sin id: ${JSON.stringify(set).slice(0, 200)}`);
     const exp = await this.postJson<Record<string, unknown>>(PUB.subscriberExport(), {
@@ -349,9 +353,17 @@ export class SubstackClient {
       columns: [...SUBSCRIBER_EXPORT_COLUMNS],
     });
     const exportId = (exp.id ?? exp.exportId ?? exp.export_id) as string | undefined;
-    let fileUrl = exp.url as string | undefined;
+    const url = exp.url as string | undefined;
+    if (!url && !exportId) throw new Error(`export sin id ni url: ${JSON.stringify(exp).slice(0, 200)}`);
+    return { exportId, url };
+  }
+
+  /** Export completo de suscriptores: crea un set, pide el export, sondea hasta tener URL y descarga. */
+  async subscriberExport(maxPolls = 60, pedido?: { exportId?: string; url?: string }): Promise<string> {
+    const { exportId, url } = pedido ?? (await this.startSubscriberExport());
+    let fileUrl = url;
     if (!fileUrl) {
-      if (!exportId) throw new Error(`export sin id ni url: ${JSON.stringify(exp).slice(0, 200)}`);
+      if (!exportId) throw new Error("el export de suscriptores no devolvió ni id ni url");
       // Mientras el export se genera, el endpoint de estado responde 400; se sondea hasta que trae `url`.
       for (let i = 0; i < maxPolls && !fileUrl; i++) {
         await sleep(this.delays.pollMs);
@@ -412,8 +424,20 @@ export async function ingestSubstack(opts: IngestOptions): Promise<IngestReport>
   const desde = opts.seriesFrom ?? DEFAULT_FROM;
   const report: IngestReport = { rawDir: opts.rawDir, downloaded: [], failed: [], sessionExpired: false };
 
+  /**
+   * El export de suscriptores se encarga aquí, antes que nada, y se recoge en el último paso:
+   * mientras Substack lo prepara se bajan las demás fuentes, en vez de esperar de brazos cruzados.
+   * Si el encargo falla, `pedido` queda vacío y el paso final lo intenta entero por su cuenta.
+   */
+  let pedido: { exportId?: string; url?: string } | undefined;
+  try {
+    pedido = await client.startSubscriberExport();
+    log("→ email_list (encargado; se recoge al final)");
+  } catch (e) {
+    log(`  encargo del export falló, se reintentará al final: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   const steps: { kind: string; file: string; run: () => Promise<string> }[] = [
-    { kind: "email_list", file: "email_list.csv", run: () => client.subscriberExport() },
     { kind: "posts", file: "posts.csv", run: () => client.postsCsv() },
     { kind: "email_stats", file: "email_stats.csv", run: () => client.emailStats() },
     { kind: "growth_sources", file: "growth_sources.csv", run: () => client.growthSources(desde) },
@@ -432,6 +456,7 @@ export async function ingestSubstack(opts: IngestOptions): Promise<IngestReport>
     { kind: "audience_overlap", file: "audience_overlap.csv", run: () => client.audienceOverlap() },
     { kind: "referrers", file: "referrers.csv", run: () => client.readerReferrals() },
     { kind: "pub_summary", file: "pub_summary.csv", run: () => client.summaries() },
+    { kind: "email_list", file: "email_list.csv", run: () => client.subscriberExport(60, pedido) },
     {
       kind: "notes",
       file: "notes.json",
