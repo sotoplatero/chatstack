@@ -29,8 +29,8 @@ export interface IngestOptions {
   knownNotes?: { counts: Map<number, NoteCounts>; withStats: Set<number> };
   /**
    * Desde cuándo pedir las series temporales. En incremental basta con los últimos meses: las
-   * filas viejas ya están en la BD y no cambian. `traffic` se pide por tramos de 90 días, así que
-   * acortar el rango es la diferencia entre 11 peticiones y 1.
+   * filas viejas ya están en la BD y no cambian. Ya no ahorra peticiones —cada serie es una, sea
+   * cual sea el rango— pero sí ahorra el transporte y el parseo de miles de filas repetidas.
    */
   seriesFrom?: string;
 }
@@ -423,7 +423,10 @@ export async function ingestSubstack(opts: IngestOptions): Promise<IngestReport>
     { kind: "followers", file: "followers.csv", run: () => client.followers(desde) },
     { kind: "unsubscribes", file: "unsubscribes.csv", run: () => client.unsubscribes(desde) },
     { kind: "unsubscribes_daily", file: "unsubscribes_daily.csv", run: () => client.unsubscribesDaily(desde) },
-    { kind: "visitor_sources", file: "visitor_sources.csv", run: () => client.visitorSources(desde) },
+    // Esta es una foto agregada que se reemplaza entera en cada sync, no una serie que se acumula.
+    // Por eso pide siempre el rango completo: si en incremental cubriera solo 120 días, la tabla
+    // significaría una cosa después de un `--full` y otra distinta después de un sync normal.
+    { kind: "visitor_sources", file: "visitor_sources.csv", run: () => client.visitorSources(DEFAULT_FROM) },
     { kind: "network_attribution", file: "network_attribution.csv", run: () => client.networkAttribution() },
     { kind: "audience_location", file: "audience_location.csv", run: () => client.audienceLocation() },
     { kind: "audience_overlap", file: "audience_overlap.csv", run: () => client.audienceOverlap() },
