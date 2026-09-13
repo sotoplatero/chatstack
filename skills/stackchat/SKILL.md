@@ -93,9 +93,23 @@ el último intento. Se usa cuando algo va mal, no en cada sesión. El estado viv
 
 ## Conectar
 
-Solo si el estado de arriba dice `sin_sesion`. **Pide el cURL directamente**, no lo ofrezcas como una
-opción entre varias: son cuatro pasos una sola vez en la vida, y a partir de ahí todo se sincroniza
-solo en segundo plano.
+Solo si el estado de arriba dice `sin_sesion`. Hay dos caminos y **el orden importa**: primero
+consigue los datos sin que el usuario haga nada, y solo después habla de dejarlo permanente.
+
+### Primero: si tienes herramientas `mcp__claude-in-chrome__*`
+
+**Úsalas y no preguntes.** Su sesión de Substack ya está en Chrome, así que puedes traer los datos
+ahora mismo sin que toque nada: los pasos están en **`<SKILL_DIR>/navegador.md`**, léelo y hazlo.
+Responde a lo que te preguntó, y solo entonces añade **una línea**: que dando el cURL una vez, esto
+se actualiza solo para siempre y no hará falta repetirlo.
+
+Pedirle que abra DevTools antes de haberle dado una sola respuesta es el peor arranque posible:
+convierte una pregunta en una tarea, y mucha gente se queda ahí.
+
+### Si no las tienes: el cURL
+
+Entonces sí, pídeselo directamente, sin ofrecerlo como una opción entre varias. Son cuatro pasos una
+sola vez en la vida y a partir de ahí todo se sincroniza solo.
 
 1. Que abra en Chrome **`https://substack.com`**, con su cuenta ya iniciada.
 2. `F12` → pestaña **Network** → recargar con `Ctrl+R`.
@@ -118,10 +132,10 @@ httpOnly, así que `document.cookie` no la incluye; `read_network_requests` no d
 la propia extensión de Chrome bloquea la lectura de cookies. El navegador puede traer **datos**,
 nunca una **sesión guardada**.
 
-**Si se niega a tocar DevTools**, existe la vía del navegador: las peticiones salen desde la propia
-página, que ya está autenticada. Los pasos están en **`<SKILL_DIR>/navegador.md`**; léelo en ese
-momento. No la elijas por parecer más cómoda: no deja sesión guardada, así que el usuario tendrá
-que estar delante en *cada* actualización futura.
+**Por qué el cURL sigue mereciendo la pena, aunque el navegador funcione.** La vía del navegador no
+deja sesión guardada, así que no hay `sync`: cada actualización futura exige al usuario delante y
+varios minutos. El cURL es una molestia que se paga una vez; el navegador, una que se paga siempre.
+Por eso se menciona **después** de haber respondido, y en una línea, no como un peaje de entrada.
 
 **El navegador llena la base y se retira.** Termina siempre en `$CS load`, y a partir de ahí se
 responde con `$CS q` como cualquier otro día. No se usa para mirar una cifra suelta, ni para

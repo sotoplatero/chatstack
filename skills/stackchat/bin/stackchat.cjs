@@ -7872,7 +7872,13 @@ ${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
               estado: "sin_sesion",
               hay_datos: !vacia,
               home: stackchatHome(),
-              siguiente: "P\xEDdele el cURL: que abra https://substack.com ya logueado, F12 \u2192 Network \u2192 Ctrl+R, clic derecho en la primera petici\xF3n \u2192 Copy as cURL (bash), lo guarde en un archivo y te pase la ruta. Luego: stackchat connect --cookies <ruta>. No le pidas el subdominio ni te lo inventes.",
+              /**
+               * El orden de estas dos vías no es un detalle. Pedirle que abra DevTools antes de
+               * darle una sola respuesta convierte su pregunta en una tarea, y mucha gente se
+               * queda ahí. Si hay navegador, su sesión ya está en Chrome: primero se traen los
+               * datos sin que toque nada, y lo de dejarlo permanente se dice después.
+               */
+              siguiente: "Si tienes herramientas mcp__claude-in-chrome__*: \xFAsalas YA para traer los datos sin que el usuario haga nada (los pasos est\xE1n en navegador.md del skill), responde a lo que pregunt\xF3, y solo luego di en UNA l\xEDnea que con el cURL esto queda permanente y autom\xE1tico. Si no las tienes: p\xEDdele el cURL \u2014 que abra https://substack.com ya logueado, F12 \u2192 Network \u2192 Ctrl+R, clic derecho en la primera petici\xF3n \u2192 Copy as cURL (bash), lo guarde en un archivo y te pase la ruta; luego `stackchat connect --cookies <ruta>`. No le pidas el subdominio ni te lo inventes.",
               ...vacia ? {} : { aviso: "Hay datos de una sesi\xF3n anterior: puedes responder con ellos mientras tanto." }
             },
             null,

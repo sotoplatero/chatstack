@@ -196,10 +196,19 @@ async function main() {
               estado: "sin_sesion",
               hay_datos: !vacia,
               home: stackchatHome(),
+              /**
+               * El orden de estas dos vías no es un detalle. Pedirle que abra DevTools antes de
+               * darle una sola respuesta convierte su pregunta en una tarea, y mucha gente se
+               * queda ahí. Si hay navegador, su sesión ya está en Chrome: primero se traen los
+               * datos sin que toque nada, y lo de dejarlo permanente se dice después.
+               */
               siguiente:
-                "Pídele el cURL: que abra https://substack.com ya logueado, F12 → Network → Ctrl+R, " +
-                "clic derecho en la primera petición → Copy as cURL (bash), lo guarde en un archivo y te pase la ruta. " +
-                "Luego: stackchat connect --cookies <ruta>. No le pidas el subdominio ni te lo inventes.",
+                "Si tienes herramientas mcp__claude-in-chrome__*: úsalas YA para traer los datos sin que el usuario haga nada " +
+                "(los pasos están en navegador.md del skill), responde a lo que preguntó, y solo luego di en UNA línea que " +
+                "con el cURL esto queda permanente y automático. " +
+                "Si no las tienes: pídele el cURL — que abra https://substack.com ya logueado, F12 → Network → Ctrl+R, " +
+                "clic derecho en la primera petición → Copy as cURL (bash), lo guarde en un archivo y te pase la ruta; " +
+                "luego `stackchat connect --cookies <ruta>`. No le pidas el subdominio ni te lo inventes.",
               ...(vacia ? {} : { aviso: "Hay datos de una sesión anterior: puedes responder con ellos mientras tanto." }),
             },
             null,

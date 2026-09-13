@@ -58,6 +58,9 @@ describe("start", () => {
     expect(r.estado).toBe("sin_sesion");
     expect(r.hay_datos).toBe(false);
     expect(r.siguiente).toMatch(/cURL/);
+    // Con navegador disponible, los datos se traen sin que el usuario toque nada: eso va primero.
+    expect(r.siguiente).toMatch(/claude-in-chrome/);
+    expect(r.siguiente.indexOf("claude-in-chrome")).toBeLessThan(r.siguiente.indexOf("F12"));
     // Y no le pide el subdominio, que es lo que no puede saber.
     expect(r.siguiente).toMatch(/No le pidas el subdominio/);
   });
