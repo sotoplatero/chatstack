@@ -81,6 +81,39 @@ describe("normDate / normalizePlan", () => {
   });
 });
 
+describe("suscriptores por la API del panel (sin descarga)", () => {
+  // `POST /api/v1/subscriber-stats` devuelve la lista en JSON, sin CORS ni descarga, asi que la via
+  // del navegador puede traerlos en cualquier maquina. El snippet los emite con las cabeceras del
+  // export para que el cargador los reconozca sin cambios: esto fija ese contrato.
+  const CABECERA = "Email,Name,Type,Stripe plan,Start date,Activity,Revenue";
+
+  it("la forma que emite el snippet se detecta como email_list", () => {
+    expect(detectKind(CABECERA.split(","))).toBe("email_list");
+  });
+
+  it("mapea los tres planes que devuelve la API", () => {
+    const fila = (tipo: string, interval: string) =>
+      normalizeSubscriberRow({
+        Email: "A@Ejemplo.com", Name: "Ana", Type: tipo, "Stripe plan": interval,
+        "Start date": "2026-05-01T10:00:00.000000000+00:00", Activity: "4", Revenue: "50",
+      });
+    // subscription_type llega null para los gratuitos y el snippet lo emite vacio.
+    expect(fila("", "free")).toMatchObject({ plan: "free", isActive: 1, email: "a@ejemplo.com" });
+    expect(fila("paid", "monthly")?.plan).toBe("monthly");
+    // La API dice "annual"; la base guarda "yearly".
+    expect(fila("paid", "annual")?.plan).toBe("yearly");
+  });
+
+  it("conserva nombre y activity_rating en extra, que es de donde salen los candidatos", () => {
+    const r = normalizeSubscriberRow({
+      Email: "b@ejemplo.com", Name: "Beto", Type: "", "Stripe plan": "free",
+      "Start date": "2026-07-20T23:06:19.807341000+00:00", Activity: "5", Revenue: "0",
+    });
+    expect(r?.extra).toMatchObject({ name: "Beto", activity: 5 });
+    expect(r?.createdAt?.slice(0, 10)).toBe("2026-07-20");
+  });
+});
+
 describe("loadDirectory", () => {
   let db: Db;
   beforeEach(() => {

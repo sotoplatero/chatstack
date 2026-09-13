@@ -87,8 +87,35 @@ P.paso = 'publication';
     files['posts.csv'] = [head, ...rows].map((r) => r.map(cell).join(',')).join('\n') + '\n';
   }
 
-  // El CSV de suscriptores no se puede leer con fetch (redirige a S3 y CORS lo corta):
-  // se entrega su enlace absoluto para que lo descargue quien sí puede.
+  // Suscriptores por la API JSON del panel: sin descarga y sin CORS, asi que funciona en
+  // cualquier maquina. Se emite con las cabeceras del export ("Email", "Type", "Start date")
+  // para que el cargador lo reconozca sin cambios.
+  P.fase = 'suscriptores';
+  {
+    const filas = [];
+    for (let off = 0; off < 20000; off += 100) {
+      const r = await _post("/api/v1/subscriber-stats", { limit: 100, offset: off });
+      const lote = (r && r.subscribers) || [];
+      filas.push(...lote);
+      P.progreso = filas.length + '/' + ((r && r.count) || '?') + ' suscriptores';
+      if (lote.length < 100) break;
+    }
+    if (filas.length) {
+      const head = ['Email', 'Name', 'Type', 'Stripe plan', 'Start date', 'Activity', 'Revenue'];
+      const cuerpo = filas.map((s) => [
+        s.user_email_address, s.user_name, s.subscription_type || '', s.subscription_interval || '',
+        s.subscription_created_at, s.activity_rating, s.total_revenue_generated,
+      ]);
+      files['email_list.csv'] = [head, ...cuerpo].map((r) => r.map(cell).join(',')).join('
+') + '
+';
+    } else {
+      P.avisos.push({ file: 'email_list.csv', motivo: 'subscriber-stats no devolvio suscriptores' });
+    }
+  }
+
+  // El export en CSV trae ademas aperturas, clics y dias activos, que la API no da. No se puede
+  // leer con fetch (redirige a S3 y CORS lo corta): se entrega el enlace para quien pueda bajarlo.
   P.fase = 'esperando el export de suscriptores';
   let email_list_url = null;
   if (exportId) {

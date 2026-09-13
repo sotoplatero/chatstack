@@ -25,22 +25,30 @@ Los datos vuelven por el resultado del tool. **No los descargues ni los hagas pa
 usuario**: el snippet no descarga nada a propósito, precisamente para que no haya archivos que
 mover a mano.
 
-**2. El CSV de suscriptores** — la única descarga de todo el proceso
+**2. Suscriptores** — ya vienen dentro del paso 1, sin descarga
 
-`window.__stackchat.datos.email_list_url` trae un enlace absoluto. **No se puede leer con `fetch`**:
-redirige a S3 sin cabeceras CORS y el navegador corta la lectura. Está comprobado, no lo reintentes.
-La única forma es que Chrome lo descargue navegando a esa URL.
+El snippet los trae por la API JSON del panel (`subscriber-stats`, paginada de 100 en 100) y los
+emite como `email_list.csv` dentro de `files`. Con el `$CS load` del paso 1 ya están cargados:
+email, nombre, plan, fecha de alta, puntuación de actividad e ingresos. Eso basta para contar,
+listar, ver quién es de pago, candidatos por actividad y churn entre cargas.
+
+**Lo único que la API no da** son las aperturas, los clics y los días activos por persona. Eso solo
+viene en el export en CSV, que sí exige descarga: `window.__stackchat.datos.email_list_url` trae
+el enlace. **No se puede leer con `fetch`** (redirige a S3 sin CORS; comprobado, no lo reintentes).
+
+Solo si la pregunta necesita ese detalle —«quién abre todos mis correos», «quién hace clic»— y tu
+shell ve la carpeta de Descargas del usuario:
 
 1. Avísale en una línea: vas a abrir el enlace del export, Chrome lo va a descargar, y si pide
    permiso que lo acepte. No es una pregunta: díselo y sigue.
 2. `navigate` a la URL.
 3. **Recógelo tú de su carpeta de Descargas.** Búscalo por el archivo más reciente que encaje
-   (`email_list*.csv`, `*subscriber*.csv`) en `~/Downloads` o el equivalente de su sistema. Muévelo
-   a la carpeta temporal y ejecuta `$CS load <carpeta>`.
+   (`email_list*.csv`, `*subscriber*.csv`) en `~/Downloads` o el equivalente. Muévelo a la carpeta
+   temporal y `$CS load <carpeta>`: sobreescribe la versión básica con la completa.
 
-**Nunca le pidas que te suba el archivo ni que lo mueva él.** Si no aparece en unos segundos,
-díselo claramente: Chrome bloquea las descargas automáticas de un sitio tras la primera, y hace
-falta que lo permita a mano. No des por hecho que se descargó.
+**Nunca le pidas que te suba el archivo ni que lo mueva él.** Si tu shell no ve sus Descargas,
+responde con lo que la API sí da, di en una línea que el detalle de aperturas queda fuera, y que
+conectando con el cURL desde su máquina lo tiene todo.
 
 **3. Notes**
 

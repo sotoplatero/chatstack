@@ -51,7 +51,16 @@ export const PUB = {
   subscriberSet: () => `/api/v1/subscriber_set`,
   subscriberExport: () => `/api/v1/subscriber_set/export`,
   subscriberExportStatus: (id: string) => `/api/v1/subscriber_set/export/${id}`,
+  /**
+   * Lista de suscriptores en JSON, la que alimenta la tabla del panel. Sin descarga y sin CORS,
+   * que es lo que la hace utilizable desde la propia pagina. `POST` con `{ limit, offset }`.
+   * Trae menos columnas que el export en CSV: ni aperturas, ni clics, ni dias activos.
+   */
+  subscriberStats: () => `/api/v1/subscriber-stats`,
 } as const;
+
+/** Tope por pagina de `subscriberStats`: con 150 responde 400. Comprobado contra el panel real. */
+export const SUBSCRIBER_STATS_PAGE = 100;
 
 /** Rutas en `https://substack.com` (perfil, Notes e interacciones). */
 export const SOCIAL = {

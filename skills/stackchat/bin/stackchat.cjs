@@ -5821,7 +5821,13 @@ var PUB = {
   archive: (offset, limit = 50) => `/api/v1/archive?sort=new&limit=${limit}&offset=${offset}`,
   subscriberSet: () => `/api/v1/subscriber_set`,
   subscriberExport: () => `/api/v1/subscriber_set/export`,
-  subscriberExportStatus: (id) => `/api/v1/subscriber_set/export/${id}`
+  subscriberExportStatus: (id) => `/api/v1/subscriber_set/export/${id}`,
+  /**
+   * Lista de suscriptores en JSON, la que alimenta la tabla del panel. Sin descarga y sin CORS,
+   * que es lo que la hace utilizable desde la propia pagina. `POST` con `{ limit, offset }`.
+   * Trae menos columnas que el export en CSV: ni aperturas, ni clics, ni dias activos.
+   */
+  subscriberStats: () => `/api/v1/subscriber-stats`
 };
 var SOCIAL = {
   self: () => `/api/v1/user/profile/self`,

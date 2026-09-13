@@ -53,14 +53,26 @@ Datos y configuración viven en `~/.stackchat/` (`config.json`, `auth.json`, `st
 
 ## Dónde tiene que ejecutarse
 
-Los datos y la sesión viven en `~/.stackchat` **de la máquina donde corre el binario**. Si eso es un
-sandbox alojado y no el ordenador del usuario, stackchat no sirve ahí: su cookie no está, la base
-que llenes se pierde al cerrar, y la siguiente sesión vuelve a empezar de cero.
+Los datos y la sesión viven en `~/.stackchat` **de la máquina donde corre el binario**. `status` te
+dice en qué home estás. Si no es el del usuario —un sandbox alojado, una sesión remota— entonces su
+cookie no está ahí y la base que llenes se pierde al cerrar.
 
-`status` te dice en qué home estás. Si no reconoces esa ruta como la del usuario, compruébalo:
-que exista su carpeta personal con `Downloads` dentro. Si no la hay, **dilo en una línea y para**:
-que ejecute stackchat en su máquina, con Claude Code o con un espacio de trabajo local. No intentes
-apañarlo pidiendo el cURL ni tirando del navegador; ninguna de las dos cosas sobrevive al cierre.
+**Eso no te impide responder, así que no te pares.** Solo cambia lo que puedes conseguir:
+
+| | Funciona en cualquier máquina | Necesita estar en la del usuario |
+|---|---|---|
+| Publicación, posts, crecimiento, tráfico | sí, por el navegador | |
+| Notes y quién interactúa | sí, por el navegador | |
+| Suscriptores: lista, plan, alta, actividad, churn | sí, por el navegador | |
+| Aperturas, clics y días activos por persona | | sí: solo vienen en el export por descarga |
+
+Todo lo de la izquierda vuelve por el resultado del tool y no toca disco. Solo el detalle de
+aperturas y clics obliga a una descarga de Chrome, y por eso es lo único que se cae cuando tu
+shell no ve la carpeta de Descargas del usuario.
+
+Así que ahí: responde con lo que sí puedes traer, di en una línea qué queda fuera y por qué, y
+dile que conectando una vez con el cURL desde su máquina lo tiene permanente y automático. Sin
+dramatizar y sin convertirlo en una pregunta.
 
 ## Antes de responder cualquier cosa
 

@@ -11,8 +11,9 @@
  *     `window.__stackchat` hasta ver `listo`.
  *  2. Chrome bloquea en silencio las descargas automáticas repetidas de un sitio. Por eso no se
  *     descarga nada: el resultado se recoge por `window.__stackchat.datos` y lo escribe Claude.
- *  3. El CSV de suscriptores no se puede leer con fetch: su URL redirige a S3 y CORS lo corta.
- *     Se entrega su enlace para que lo baje quien pueda (el CLI, o el usuario con un clic).
+ *  3. Los suscriptores se traen por `subscriber-stats`, la API JSON de la tabla del panel: sin
+ *     descarga y sin CORS. El export en CSV, que ademas trae aperturas y clics, no se puede leer
+ *     con fetch (redirige a S3 y CORS lo corta): se entrega su enlace para quien pueda bajarlo.
  *
  * `note_stats` se reduce a sus cifras: en crudo son ~12 KB por nota (lleva series temporales que
  * nadie consulta) y el bundle pasaría de 100 KB a 2 MB.
@@ -21,7 +22,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  PUB, SUBSCRIBER_EXPORT_COLUMNS, SUBSCRIBER_SET_QUERY, DEFAULT_FROM, dateChunks, today,
+  PUB, SUBSCRIBER_EXPORT_COLUMNS, SUBSCRIBER_SET_QUERY, SUBSCRIBER_STATS_PAGE, DEFAULT_FROM, dateChunks, today,
 } from "../dist/ingest/endpoints.js";
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "stackchat", "browser");
@@ -124,8 +125,35 @@ P.paso = 'publication';
     files['posts.csv'] = [head, ...rows].map((r) => r.map(cell).join(',')).join('\\n') + '\\n';
   }
 
-  // El CSV de suscriptores no se puede leer con fetch (redirige a S3 y CORS lo corta):
-  // se entrega su enlace absoluto para que lo descargue quien sí puede.
+  // Suscriptores por la API JSON del panel: sin descarga y sin CORS, asi que funciona en
+  // cualquier maquina. Se emite con las cabeceras del export ("Email", "Type", "Start date")
+  // para que el cargador lo reconozca sin cambios.
+  P.fase = 'suscriptores';
+  {
+    const filas = [];
+    for (let off = 0; off < 20000; off += ${SUBSCRIBER_STATS_PAGE}) {
+      const r = await _post(${j(PUB.subscriberStats())}, { limit: ${SUBSCRIBER_STATS_PAGE}, offset: off });
+      const lote = (r && r.subscribers) || [];
+      filas.push(...lote);
+      P.progreso = filas.length + '/' + ((r && r.count) || '?') + ' suscriptores';
+      if (lote.length < ${SUBSCRIBER_STATS_PAGE}) break;
+    }
+    if (filas.length) {
+      const head = ['Email', 'Name', 'Type', 'Stripe plan', 'Start date', 'Activity', 'Revenue'];
+      const cuerpo = filas.map((s) => [
+        s.user_email_address, s.user_name, s.subscription_type || '', s.subscription_interval || '',
+        s.subscription_created_at, s.activity_rating, s.total_revenue_generated,
+      ]);
+      files['email_list.csv'] = [head, ...cuerpo].map((r) => r.map(cell).join(',')).join('
+') + '
+';
+    } else {
+      P.avisos.push({ file: 'email_list.csv', motivo: 'subscriber-stats no devolvio suscriptores' });
+    }
+  }
+
+  // El export en CSV trae ademas aperturas, clics y dias activos, que la API no da. No se puede
+  // leer con fetch (redirige a S3 y CORS lo corta): se entrega el enlace para quien pueda bajarlo.
   P.fase = 'esperando el export de suscriptores';
   let email_list_url = null;
   if (exportId) {
