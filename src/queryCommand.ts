@@ -51,7 +51,24 @@ const enumFlag = <T extends string>(f: Flags, name: string, allowed: readonly T[
   return v as T;
 };
 
+/**
+ * Fechas: solo ISO `YYYY-MM-DD`. Se comparan como texto contra las fechas ISO de la base, así que
+ * cualquier otro formato filtra de más o de menos SIN dar error. `--after 10-09-2026` devolvía los
+ * 132 suscriptores en vez de los 4 reales, y la respuesta parecía perfectamente razonable.
+ */
+const dateFlag = (f: Flags, name: string): string | undefined => {
+  const v = str(f, name);
+  if (v === undefined) return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  const d = m && new Date(`${v}T00:00:00Z`);
+  if (!m || !d || Number.isNaN(d.getTime()) || d.getUTCDate() !== Number(m[3])) {
+    throw new UsageError(`--${name} debe ser una fecha YYYY-MM-DD, no ${JSON.stringify(v)}`);
+  }
+  return v;
+};
+
 const POST_SORTS = ["open_rate", "views", "subscribes", "signups", "post_date"] as const;
+const PLANS = ["free", "paid", "monthly", "yearly"] as const;
 const NOTE_SORTS = ["date", "reactions", "restacks", "replies", "interactions"] as const;
 const GROUPS = ["day", "week", "month", "source"] as const;
 const KINDS = ["like", "restack", "reply"] as const;
@@ -66,10 +83,10 @@ export const QUERIES: Record<string, QueryDef> = {
     flags: "--plan free|paid|monthly|yearly --active true|false --after YYYY-MM-DD --before YYYY-MM-DD --email texto --limit N --offset N",
     run: (db, f) =>
       q.listSubscribers(db, {
-        plan: str(f, "plan"),
+        plan: f.plan === undefined ? undefined : enumFlag(f, "plan", PLANS, "free"),
         is_active: bool(f, "active"),
-        subscribed_after: str(f, "after"),
-        subscribed_before: str(f, "before"),
+        subscribed_after: dateFlag(f, "after"),
+        subscribed_before: dateFlag(f, "before"),
         email_contains: str(f, "email"),
         limit: int(f, "limit", 50),
         offset: int(f, "offset", 0),
@@ -97,12 +114,12 @@ export const QUERIES: Record<string, QueryDef> = {
   growth: {
     summary: "Altas por fuente y series diarias free/paid, agrupadas.",
     flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${GROUPS.join("|")}`,
-    run: (db, f) => q.getGrowth(db, str(f, "from"), str(f, "to"), enumFlag(f, "group-by", GROUPS, "month")),
+    run: (db, f) => q.getGrowth(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", GROUPS, "month")),
   },
   churn: {
     summary: "Bajas y transiciones de plan entre syncs (necesita ≥2 syncs).",
     flags: "--from YYYY-MM-DD --to YYYY-MM-DD",
-    run: (db, f) => q.getChurn(db, str(f, "from"), str(f, "to")),
+    run: (db, f) => q.getChurn(db, dateFlag(f, "from"), dateFlag(f, "to")),
   },
   notes: {
     summary: "Tus Notes con likes, restacks, respuestas y personas únicas.",

@@ -75,6 +75,28 @@ describe("runQuery", () => {
     expect(() => runQuery(db, "note", {})).toThrow(/--id/);
   });
 
+  it("una fecha que no sea ISO falla, en vez de filtrar mal en silencio", () => {
+    // Se comparan como texto contra fechas ISO. `10-09-2026` es menor que cualquier `2026-..`,
+    // asi que el filtro no descartaba nada y devolvia la tabla entera como si fuera la respuesta.
+    for (const v of ["10-09-2026", "09/10/2026", "ayer", "2026-9-1", "2026-02-30"]) {
+      expect(() => runQuery(db, "subscribers", { after: v })).toThrow(/YYYY-MM-DD/);
+    }
+    expect(() => runQuery(db, "subscribers", { before: "31-12-2026" })).toThrow(/YYYY-MM-DD/);
+    expect(() => runQuery(db, "growth", { from: "hace un mes" })).toThrow(/YYYY-MM-DD/);
+    expect(() => runQuery(db, "churn", { to: "1/1/26" })).toThrow(/YYYY-MM-DD/);
+    // La ISO valida sigue pasando, incluido un bisiesto de verdad.
+    expect(() => runQuery(db, "subscribers", { after: "2026-09-10" })).not.toThrow();
+    expect(() => runQuery(db, "subscribers", { after: "2024-02-29" })).not.toThrow();
+  });
+
+  it("--plan estaba documentado como lista cerrada pero aceptaba cualquier cosa", () => {
+    // `--plan gratis` devolvia cero filas con exito: se leia como \"no tienes suscriptores free\".
+    expect(() => runQuery(db, "subscribers", { plan: "gratis" })).toThrow(/debe ser uno de/);
+    for (const p of ["free", "paid", "monthly", "yearly"]) {
+      expect(() => runQuery(db, "subscribers", { plan: p })).not.toThrow();
+    }
+  });
+
   it("la ayuda nombra todas las consultas", () => {
     const h = helpText();
     for (const name of QUERY_NAMES) expect(h).toContain(name);

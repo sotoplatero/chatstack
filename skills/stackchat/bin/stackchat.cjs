@@ -6262,7 +6262,18 @@ var enumFlag = (f, name, allowed, fallback) => {
   }
   return v;
 };
+var dateFlag = (f, name) => {
+  const v = str(f, name);
+  if (v === void 0) return void 0;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  const d = m && /* @__PURE__ */ new Date(`${v}T00:00:00Z`);
+  if (!m || !d || Number.isNaN(d.getTime()) || d.getUTCDate() !== Number(m[3])) {
+    throw new UsageError(`--${name} debe ser una fecha YYYY-MM-DD, no ${JSON.stringify(v)}`);
+  }
+  return v;
+};
 var POST_SORTS = ["open_rate", "views", "subscribes", "signups", "post_date"];
+var PLANS = ["free", "paid", "monthly", "yearly"];
 var NOTE_SORTS = ["date", "reactions", "restacks", "replies", "interactions"];
 var GROUPS = ["day", "week", "month", "source"];
 var KINDS = ["like", "restack", "reply"];
@@ -6275,10 +6286,10 @@ var QUERIES = {
     summary: "Lista contactos con filtros.",
     flags: "--plan free|paid|monthly|yearly --active true|false --after YYYY-MM-DD --before YYYY-MM-DD --email texto --limit N --offset N",
     run: (db, f) => listSubscribers(db, {
-      plan: str(f, "plan"),
+      plan: f.plan === void 0 ? void 0 : enumFlag(f, "plan", PLANS, "free"),
       is_active: bool2(f, "active"),
-      subscribed_after: str(f, "after"),
-      subscribed_before: str(f, "before"),
+      subscribed_after: dateFlag(f, "after"),
+      subscribed_before: dateFlag(f, "before"),
       email_contains: str(f, "email"),
       limit: int(f, "limit", 50),
       offset: int(f, "offset", 0)
@@ -6306,12 +6317,12 @@ var QUERIES = {
   growth: {
     summary: "Altas por fuente y series diarias free/paid, agrupadas.",
     flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${GROUPS.join("|")}`,
-    run: (db, f) => getGrowth(db, str(f, "from"), str(f, "to"), enumFlag(f, "group-by", GROUPS, "month"))
+    run: (db, f) => getGrowth(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", GROUPS, "month"))
   },
   churn: {
     summary: "Bajas y transiciones de plan entre syncs (necesita \u22652 syncs).",
     flags: "--from YYYY-MM-DD --to YYYY-MM-DD",
-    run: (db, f) => getChurn(db, str(f, "from"), str(f, "to"))
+    run: (db, f) => getChurn(db, dateFlag(f, "from"), dateFlag(f, "to"))
   },
   notes: {
     summary: "Tus Notes con likes, restacks, respuestas y personas \xFAnicas.",
