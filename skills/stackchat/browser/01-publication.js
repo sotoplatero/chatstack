@@ -127,6 +127,13 @@ P.paso = 'publication';
     }
     if (!email_list_url) P.avisos.push({ file: 'email_list.csv', motivo: 'el export seguia sin estar listo tras 60s', export_id: exportId });
   }
+  // La lectura falla por CORS, pero la peticion se hace y Chrome registra la redireccion a S3.
+  // Esa URL de S3 va firmada (X-Amz-Signature, 24 h): quien lea el registro de red con
+  // read_network_requests puede bajarla con curl sin cookie ni carpeta de Descargas.
+  if (email_list_url) {
+    P.fase = 'dejando la URL firmada en el registro de red';
+    try { await fetch(email_list_url, { credentials: 'include' }); } catch (e) { /* esperado */ }
+  }
 
   P.datos = { kind: 'stackchat-files', fetched_at: new Date().toISOString(), origin: location.origin, files, email_list_url };
   P.resumen = {

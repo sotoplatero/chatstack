@@ -57,22 +57,15 @@ Los datos y la sesión viven en `~/.stackchat` **de la máquina donde corre el b
 dice en qué home estás. Si no es el del usuario —un sandbox alojado, una sesión remota— entonces su
 cookie no está ahí y la base que llenes se pierde al cerrar.
 
-**Eso no te impide responder, así que no te pares.** Solo cambia lo que puedes conseguir:
+**Eso no te impide responder, así que no te pares.** La vía del navegador trae todo sin tocar el
+disco del usuario: publicación, posts, crecimiento, tráfico, Notes y suscriptores vuelven por el
+resultado del tool, y el detalle de aperturas y clics se baja con `curl` desde una URL firmada que
+queda en el registro de red (está en `navegador.md`). Lo que pierdes es la persistencia: la base
+que llenes ahí se borra al cerrar y no habrá `sync` automático.
 
-| | Funciona en cualquier máquina | Necesita estar en la del usuario |
-|---|---|---|
-| Publicación, posts, crecimiento, tráfico | sí, por el navegador | |
-| Notes y quién interactúa | sí, por el navegador | |
-| Suscriptores: lista, plan, alta, actividad, churn | sí, por el navegador | |
-| Aperturas, clics y días activos por persona | | sí: solo vienen en el export por descarga |
-
-Todo lo de la izquierda vuelve por el resultado del tool y no toca disco. Solo el detalle de
-aperturas y clics obliga a una descarga de Chrome, y por eso es lo único que se cae cuando tu
-shell no ve la carpeta de Descargas del usuario.
-
-Así que ahí: responde con lo que sí puedes traer, di en una línea qué queda fuera y por qué, y
-dile que conectando una vez con el cURL desde su máquina lo tiene permanente y automático. Sin
-dramatizar y sin convertirlo en una pregunta.
+Así que ahí: trae los datos por el navegador, responde, y dile en una línea que conectando una vez
+con el cURL desde su máquina lo tiene permanente y automático. Sin dramatizar y sin convertirlo en
+una pregunta.
 
 ## Antes de responder cualquier cosa
 
@@ -163,11 +156,10 @@ delante en *cada* sincronización futura, para siempre, porque no deja sesión g
 puede funcionar sin ella. El cURL es una molestia que se paga una vez; el navegador es una molestia
 que se paga siempre.
 
-**Antes de empezarla, comprueba que Chrome y tu shell son la misma máquina.** La vía del navegador
-termina leyendo un CSV de la carpeta de Descargas del usuario. Si tu shell corre en otro sitio
-—sesión remota, o un espacio de trabajo que no ve `~/Downloads`— no puedes completarla, y acabarás
-pidiéndole al usuario que te suba archivos a mano. Eso está prohibido (ver la regla 3). En ese caso
-dilo y pide el cURL, que ahí es la única vía que funciona sin trabajo manual.
+**No hace falta que Chrome y tu shell sean la misma máquina.** Nada pasa por la carpeta de
+Descargas del usuario: los datos vuelven por el resultado del tool y el CSV de engagement se baja
+con `curl` desde una URL firmada. Lo que sí necesitas es poder ejecutar el binario en algún sitio
+con red.
 
 ## Refrescar
 
