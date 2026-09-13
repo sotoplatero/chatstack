@@ -15,7 +15,7 @@ description: >-
 Tus datos de Substack en una base SQLite local que puedes preguntar en lenguaje natural.
 Todo se queda en la máquina del usuario: no hay servidor, no se envía nada a ningún sitio.
 
-## Dos reglas, antes que nada
+## Tres reglas, antes que nada
 
 **1. Ejecuta `$CS status` antes de decir una sola palabra sobre el estado.** Nunca afirmes que el
 usuario no está conectado, que no hay datos, o que falta algo, sin haberlo comprobado en esta
@@ -26,6 +26,13 @@ guardada de antes.
 lectura: hazlas y cuenta el resultado. Nada de «¿quieres que lo conecte?» o «¿procedo?». La única
 vez que se pregunta algo es cuando necesitas el archivo cURL, que solo el usuario puede darte — y
 entonces se pide directamente, no se ofrece.
+
+**3. La descarga de datos es trabajo tuyo, nunca suyo.** El usuario pide algo y tú lo consigues.
+Nada de «¿quieres que baje también las notas?», nada de «descárgate esto y súbemelo», nada de dejar
+un conjunto a medias porque tarda. Lo único que puedes pedirle es el cURL, una vez, porque su sesión
+solo la tiene él. Todo lo demás —lanzar syncs, esperar exports, recoger un archivo de su carpeta de
+Descargas, cargarlo— lo haces tú sin preguntar. Si algo va a tardar, **dilo y sigue**, no lo
+conviertas en una pregunta.
 
 ## El comando
 
@@ -110,13 +117,34 @@ las lista: repite con `--sub <subdominio>`. **Dile que borre el archivo al termi
 El primer `sync` tarda 3-4 minutos porque recorre todas las notas. Lánzalo con `--background` y
 sigue atendiendo: las estadísticas y los suscriptores estarán en segundos, las notas al final.
 
+### No intentes sacar la cookie del navegador: está comprobado que no se puede
+
+Parece la solución obvia y no lo es. Comprobado sobre una sesión real:
+
+- `document.cookie` **no** incluye `substack.sid`: es httpOnly. Solo se ven cookies de analítica y
+  `substack.lli`, que no autentica nada.
+- `read_network_requests` devuelve url, método y código de estado. **Sin cabeceras**, así que la
+  cabecera `Cookie` de las peticiones tampoco está.
+
+No hay tercera vía con las herramientas disponibles. Si se te ocurre «conecto por Chrome y ya»,
+para: el navegador puede traer **datos**, nunca una **sesión guardada**.
+
 ### Si se niega a tocar DevTools
 
-Hay una vía alternativa con Claude in Chrome, sin pegar nada: las peticiones salen desde la propia
-página, que ya está autenticada. Funciona, pero exige que estés encima en cada sincronización,
-gasta contexto y abre ventanas de descarga. Úsala solo si el usuario rechaza el cURL y existen
-herramientas `mcp__claude-in-chrome__*`; los pasos están en **`<SKILL_DIR>/navegador.md`**, léelo
-entonces.
+Entonces, y solo entonces, existe la vía del navegador: las peticiones salen desde la propia
+página, que ya está autenticada. Requiere herramientas `mcp__claude-in-chrome__*`. Los pasos están
+en **`<SKILL_DIR>/navegador.md`**; léelo en ese momento.
+
+**No la elijas por parecer más cómoda.** Ahorra cuatro pasos hoy y cuesta que el usuario esté
+delante en *cada* sincronización futura, para siempre, porque no deja sesión guardada y `sync` no
+puede funcionar sin ella. El cURL es una molestia que se paga una vez; el navegador es una molestia
+que se paga siempre.
+
+**Antes de empezarla, comprueba que Chrome y tu shell son la misma máquina.** La vía del navegador
+termina leyendo un CSV de la carpeta de Descargas del usuario. Si tu shell corre en otro sitio
+—sesión remota, o un espacio de trabajo que no ve `~/Downloads`— no puedes completarla, y acabarás
+pidiéndole al usuario que te suba archivos a mano. Eso está prohibido (ver la regla 3). En ese caso
+dilo y pide el cURL, que ahí es la única vía que funciona sin trabajo manual.
 
 ## Refrescar
 
