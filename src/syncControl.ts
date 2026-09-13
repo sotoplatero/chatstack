@@ -102,6 +102,11 @@ export function readLastSyncLog(): string | null {
  * hook es idéntico en Windows, macOS y Linux.
  */
 export function relaunchDetached(argv: string[], execPath = process.execPath): number | undefined {
+  // El hijo se lanza con stdio ignorado, así que si no arranca muere sin dejar rastro y quien lo
+  // lanzó seguiría anunciando una descarga que no existe. Eso pasa al ejecutar las fuentes con
+  // `tsx`: el punto de entrada es TypeScript y node no lo sabe interpretar. Vale más decirlo.
+  const entrada = argv[0] ?? "";
+  if (!/\.(c|m)?js$/i.test(entrada)) return undefined;
   const child = spawn(execPath, argv, {
     detached: true,
     stdio: "ignore",

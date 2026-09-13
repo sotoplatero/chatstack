@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb, type Db } from "../src/db/index.js";
-import { acquireLock, releaseLock, lockPath, isFresh, hoursSinceLastSync, writeSyncLog, readLastSyncLog, LOCK_TTL_MS } from "../src/syncControl.js";
+import { acquireLock, releaseLock, lockPath, isFresh, hoursSinceLastSync, relaunchDetached, writeSyncLog, readLastSyncLog, LOCK_TTL_MS } from "../src/syncControl.js";
 import { collectNotes, fetchOwnNotes, type NoteCounts } from "../src/ingest/notes.js";
 import { SubstackClient } from "../src/ingest/substack.js";
 import { coverage, knownNotes, missingDatasets } from "../src/queries.js";
@@ -96,6 +96,15 @@ describe("candado", () => {
     releaseLock();
     expect(existsSync(lockPath())).toBe(false);
     expect(() => releaseLock()).not.toThrow();
+  });
+});
+
+describe("lanzar en segundo plano", () => {
+  it("no finge un lanzamiento cuando el punto de entrada no es ejecutable por node", () => {
+    // Con `tsx` el punto de entrada es TypeScript: el hijo moría al instante y, como su salida se
+    // ignora, quien lo lanzó seguía anunciando una descarga que no existía.
+    expect(relaunchDetached(["/ruta/cli.ts", "sync"])).toBeUndefined();
+    expect(relaunchDetached(["", "sync"])).toBeUndefined();
   });
 });
 

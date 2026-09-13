@@ -16,6 +16,15 @@ description: >-
 Los datos de Substack del usuario en una base SQLite local que puedes preguntar. Todo se queda en
 su máquina: no hay servidor y no se envía nada a ningún sitio.
 
+## Estado, ya comprobado
+
+Esto se ha ejecutado solo al cargar el skill, así que **no lo repitas**: ya sabes si hay sesión, si
+hay datos y si estaban frescos. Si faltaba algo, la descarga ya va en segundo plano.
+
+!`node --no-warnings=ExperimentalWarning "${CLAUDE_SKILL_DIR}/bin/stackchat.cjs" start || true`
+
+Lee el `estado` de ahí arriba y haz lo que diga `siguiente`. La tabla de estados está más abajo.
+
 ## Tres reglas
 
 **1. Se responde contra la base, y solo contra la base.** Toda pregunta sobre suscriptores, posts,
@@ -30,10 +39,9 @@ milisegundos; la vía del navegador son minutos, varios turnos y el usuario dela
 Y si la base dice cero, **cero es la respuesta**. «No hay ninguna baja» es un resultado, no un
 fallo que haya que ir a resolver a otro sitio.
 
-**2. Comprueba antes de afirmar.** Ejecuta `$CS status` antes de decir una sola palabra sobre el
-estado. Nunca afirmes que no está conectado, que no hay datos o que falta algo sin haberlo mirado
-en esta sesión. Es el error número uno: suena razonable y es falso, porque mucha gente ya tiene su
-sesión guardada de antes.
+**2. Comprueba antes de afirmar.** El estado está arriba, ya ejecutado: léelo. Nunca afirmes que no
+está conectado, que no hay datos o que falta algo sin haberlo mirado ahí. Es el error número uno:
+suena razonable y es falso, porque mucha gente ya tiene su sesión guardada de antes.
 
 **3. Actúa, no pidas permiso.** Consultar y sincronizar son acciones locales y de solo lectura:
 hazlas y cuenta el resultado. Nada de «¿quieres que lo conecte?». Conseguir los datos es trabajo
@@ -48,49 +56,36 @@ directorio del skill (te la dan al cargarlo, como «Base directory for this skil
 
 ```bash
 CS="node --no-warnings=ExperimentalWarning <SKILL_DIR>/bin/stackchat.cjs"
-$CS status
+$CS q overview
 ```
 
 En PowerShell la variable no se expande igual; ahí escribe la ruta completa en cada llamada, o
 usa la herramienta Bash. Requiere **Node 22.13 o superior**: si `node --version` es menor, dilo y
 para, porque nada más va a funcionar. Todo vive en `~/.stackchat`.
 
-## Decide con `status`
+## Qué significa cada estado
 
-Una llamada, milisegundos. Devuelve `home`, `connected`, `subdomain`, `last_sync`,
-`last_background_sync`, `coverage` (filas y `last_run_id` por conjunto) y `missing` (los conjuntos
-que **nunca** se han descargado; una tabla vacía cuya fuente sí se descargó no sale aquí, porque
-el usuario simplemente no tiene esos datos).
+Lo de arriba lo ha devuelto `$CS start`, que corre solo al cargar el skill: comprueba si hay sesión
+y datos, mira si están frescos, **lanza en segundo plano lo que falte** y resume la publicación. No
+hay nada que interpretar ni que volver a ejecutar; solo si la sesión se alarga y quieres releer el
+estado, vuelve a llamarlo.
 
-Decide con esta tabla, sin preguntarle nada. Manda la primera fila que encaje:
-
-| `status` dice | Qué haces |
+| `estado` | Qué significa y qué haces |
 |---|---|
-| `connected: false` | Pide el cURL. Sin sesión guardada `sync` no funciona, aunque ya haya datos de antes. |
-| Falta lo que la pregunta necesita | `$CS sync --background` y **responde igual**, con lo que haya |
-| Todo presente y `last_sync` de hace más de 6 h | `$CS sync --if-stale 6 --background` y responde sin esperar |
-| Todo presente y fresco | Responde y ya |
-| `last_background_sync` dice `partial` | Responde, y di qué conjunto puede estar viejo. Se arregla solo. |
-| `last_background_sync` dice `falló: la sesión ha caducado` | Pide el cURL nuevo. **No relances en bucle.** |
-| `last_background_sync` dice `falló: no se descargó nada` | Fue la red, no la sesión. Reintenta más tarde, no pidas cURL. |
+| `listo` | Datos frescos. Responde con `$CS q`. |
+| `listo_actualizando` | Hay datos y ya se está bajando lo que faltaba. **Responde igual**, con lo que hay, y dilo en una línea. |
+| `descargando_por_primera_vez` | Base vacía y sesión válida. El primer sync tarda 3-4 minutos por las notas: dilo y sigue atendiendo. |
+| `sin_sesion` | No hay con qué descargar. `siguiente` trae los pasos del cURL; si además dice `hay_datos: true`, responde mientras tanto con lo que haya. |
 
-`sync --background` devuelve en ~300 ms y sigue por su cuenta. **Nunca lo esperes, nunca sondees,
-nunca digas «dame un momento».** Responde con lo que exista y añade una línea diciendo qué se está
-descargando. Un candado impide que se solapen dos syncs, así que lánzalo sin contar cuántas veces.
-Un sync incremental tarda unos quince segundos; el primero, 3-4 minutos por las notas.
+**Nunca esperes al sync, nunca sondees, nunca digas «dame un momento».** Se desasocia y sigue por su
+cuenta; un candado impide que se solapen dos. Cuando el usuario vuelva a preguntar, ya estará.
 
-Solo lanza un sync si falta lo que hace falta para *esa* pregunta:
-
-| Si preguntan por… | Necesitas |
-|---|---|
-| cuántos suscriptores, quién abre, candidatos a pago, bajas, riesgo | `subscribers` |
-| artículos, aperturas por post, qué convierte, cuándo enviar | `posts`, `post_stats` |
-| de dónde vienen las altas, tráfico, crecimiento, países | `growth`, `traffic`, `subscriber_totals` |
-| notas, quién da like, quién responde, quién restackea | `notes`, `note_interactions` |
+`$CS status` sigue existiendo para mirar el detalle: cobertura por conjunto, qué falta y cómo acabó
+el último sync de fondo. Se usa cuando algo va mal, no en cada sesión.
 
 ## Conectar
 
-Solo si `status` dice `connected: false`. **Pide el cURL directamente**, no lo ofrezcas como una
+Solo si el estado de arriba dice `sin_sesion`. **Pide el cURL directamente**, no lo ofrezcas como una
 opción entre varias: son cuatro pasos una sola vez en la vida, y a partir de ahí todo se sincroniza
 solo en segundo plano.
 
@@ -107,7 +102,7 @@ una URL que no existe y a un callejón sin salida. Si administra varias publicac
 lista con su nombre y se elige con `--sub`.
 
 `connect` verifica la sesión y detecta la publicación antes de guardar nada. Dile que borre el
-archivo al terminar. Una vez conectado, el subdominio está en `$CS status`; hasta entonces, no lo
+archivo al terminar. Una vez conectado, el subdominio sale en el estado; hasta entonces, no lo
 sabes.
 
 **No intentes sacar la cookie del navegador: está comprobado que no se puede.** `substack.sid` es

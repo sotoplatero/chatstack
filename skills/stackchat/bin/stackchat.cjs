@@ -7680,6 +7680,8 @@ function readLastSyncLog() {
   }
 }
 function relaunchDetached(argv, execPath = process.execPath) {
+  const entrada = argv[0] ?? "";
+  if (!/\.(c|m)?js$/i.test(entrada)) return void 0;
   const child = (0, import_node_child_process.spawn)(execPath, argv, {
     detached: true,
     stdio: "ignore",
@@ -7693,6 +7695,10 @@ function relaunchDetached(argv, execPath = process.execPath) {
 var HELP = `stackchat \u2014 tus datos de Substack en una base local que puedes consultar
 
 Uso:
+  stackchat start [--if-stale <horas>]
+                  Lo primero de cada sesi\xF3n. Mira si hay sesi\xF3n y datos, lanza en segundo
+                  plano lo que haga falta, y devuelve en un JSON el estado, un resumen y
+                  qu\xE9 toca hacer. Si no hay sesi\xF3n, devuelve los pasos para conseguirla.
   stackchat connect --cookies <archivo.curl> [--sub <subdominio>]
                   Verifica tu sesi\xF3n, detecta tu publicaci\xF3n y lo guarda en ~/.stackchat.
                   El archivo sale de Chrome: en el panel de Substack, F12 \u2192 Network \u2192
@@ -7825,6 +7831,65 @@ ${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
       printReport(loadDirectory(openDb(dbFile), (0, import_node_path7.resolve)(dir)), log);
       return;
     }
+    /**
+     * Lo primero que se ejecuta al invocar el skill, y lo único que hay que decidir.
+     *
+     * Antes esto era una tabla de siete filas en el SKILL.md que el modelo tenía que leer e
+     * interpretar cada vez: mirar `status`, compararlo con la pregunta, elegir entre pedir el
+     * cURL, lanzar un sync o responder. Una decisión mecánica con datos exactos no debería
+     * depender de que alguien la lea bien, así que la toma el binario: comprueba, actualiza en
+     * segundo plano si hace falta, y devuelve qué toca hacer ya.
+     */
+    case "start": {
+      const auth = loadAuth(authPath());
+      const sub = resolveSubdomain(values.sub);
+      const db = openDb(dbFile);
+      const horas = values["if-stale"] !== void 0 ? Number(values["if-stale"]) : 6;
+      const falta = missingDatasets(db);
+      const cov = coverage(db);
+      const vacia = cov.every((c) => c.rows === 0);
+      if (!auth || !sub) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              estado: "sin_sesion",
+              hay_datos: !vacia,
+              home: stackchatHome(),
+              siguiente: "P\xEDdele el cURL: que abra https://substack.com ya logueado, F12 \u2192 Network \u2192 Ctrl+R, clic derecho en la primera petici\xF3n \u2192 Copy as cURL (bash), lo guarde en un archivo y te pase la ruta. Luego: stackchat connect --cookies <ruta>. No le pidas el subdominio ni te lo inventes.",
+              ...vacia ? {} : { aviso: "Hay datos de una sesi\xF3n anterior: puedes responder con ellos mientras tanto." }
+            },
+            null,
+            1
+          ) + "\n"
+        );
+        return;
+      }
+      const fresca = isFresh(db, Number.isFinite(horas) && horas >= 0 ? horas : 6);
+      const hayQueBajar = vacia || falta.length > 0 || !fresca;
+      let lanzado = null;
+      if (hayQueBajar) {
+        const args = [process.argv[1], "sync", ...values.sub ? ["--sub", values.sub] : [], ...values.db ? ["--db", values.db] : []];
+        const pid = relaunchDetached(args);
+        lanzado = pid ? `sync en segundo plano (pid ${pid})` : "no se pudo lanzar en segundo plano; ejecuta `stackchat sync` a mano";
+      }
+      process.stdout.write(
+        JSON.stringify(
+          {
+            estado: vacia ? hayQueBajar ? "descargando_por_primera_vez" : "sin_datos" : hayQueBajar ? "listo_actualizando" : "listo",
+            subdomain: sub,
+            publication_name: loadConfig()?.publication_name ?? null,
+            ultimo_sync: readLastSyncLog(),
+            faltan: falta,
+            actualizacion: lanzado,
+            siguiente: vacia ? "El primer sync tarda 3-4 minutos por las notas. Dilo en una l\xEDnea y sigue atendiendo; no lo esperes." : "Responde ya con `stackchat q <consulta>`. Si lanz\xF3 un sync, dilo en una l\xEDnea y no lo esperes.",
+            resumen: vacia ? null : getOverview(db)
+          },
+          null,
+          1
+        ) + "\n"
+      );
+      return;
+    }
     case "sync": {
       const sub = resolveSubdomain(values.sub);
       const auth = loadAuth(authPath());
@@ -7846,8 +7911,13 @@ ${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
       }
       if (values.background) {
         const args = [process.argv[1], ...process.argv.slice(2).filter((a) => a !== "--background")];
-        log(`sync lanzado en segundo plano (pid ${relaunchDetached(args)})`);
-        return;
+        const pid = relaunchDetached(args);
+        if (!pid) {
+          log("No se pudo lanzar en segundo plano desde este punto de entrada; ejecutando aqu\xED mismo.");
+        } else {
+          log(`sync lanzado en segundo plano (pid ${pid})`);
+          return;
+        }
       }
       if (!acquireLock()) {
         log("Ya hay un sync en marcha; no lanzo otro.");

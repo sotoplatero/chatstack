@@ -6,7 +6,7 @@ import { loadDirectory, type RunReport } from "./load/index.js";
 import { ingestSubstack } from "./ingest/substack.js";
 import { cookieFromCurl, loadAuth } from "./ingest/auth.js";
 import { helpText, parseFlags, runQuery, UsageError } from "./queryCommand.js";
-import { coverage, knownNotes, missingDatasets, querySql } from "./queries.js";
+import { coverage, getOverview, knownNotes, missingDatasets, querySql } from "./queries.js";
 import { connect } from "./connect.js";
 import { acquireLock, isFresh, readLastSyncLog, relaunchDetached, releaseLock, writeSyncLog } from "./syncControl.js";
 import { authPath, stackchatHome, dbPath as resolveDbPath, loadConfig, rawDir, resolveSubdomain } from "./paths.js";
@@ -14,6 +14,10 @@ import { authPath, stackchatHome, dbPath as resolveDbPath, loadConfig, rawDir, r
 const HELP = `stackchat — tus datos de Substack en una base local que puedes consultar
 
 Uso:
+  stackchat start [--if-stale <horas>]
+                  Lo primero de cada sesión. Mira si hay sesión y datos, lanza en segundo
+                  plano lo que haga falta, y devuelve en un JSON el estado, un resumen y
+                  qué toca hacer. Si no hay sesión, devuelve los pasos para conseguirla.
   stackchat connect --cookies <archivo.curl> [--sub <subdominio>]
                   Verifica tu sesión, detecta tu publicación y lo guarda en ~/.stackchat.
                   El archivo sale de Chrome: en el panel de Substack, F12 → Network →
@@ -166,6 +170,77 @@ async function main() {
       printReport(loadDirectory(openDb(dbFile), resolve(dir)), log);
       return;
     }
+    /**
+     * Lo primero que se ejecuta al invocar el skill, y lo único que hay que decidir.
+     *
+     * Antes esto era una tabla de siete filas en el SKILL.md que el modelo tenía que leer e
+     * interpretar cada vez: mirar `status`, compararlo con la pregunta, elegir entre pedir el
+     * cURL, lanzar un sync o responder. Una decisión mecánica con datos exactos no debería
+     * depender de que alguien la lea bien, así que la toma el binario: comprueba, actualiza en
+     * segundo plano si hace falta, y devuelve qué toca hacer ya.
+     */
+    case "start": {
+      const auth = loadAuth(authPath());
+      const sub = resolveSubdomain(values.sub);
+      const db = openDb(dbFile);
+      const horas = values["if-stale"] !== undefined ? Number(values["if-stale"]) : 6;
+      const falta = missingDatasets(db);
+      const cov = coverage(db);
+      const vacia = cov.every((c) => c.rows === 0);
+
+      // Sin sesión no hay nada que sincronizar: toca descubrir de quién son los datos.
+      if (!auth || !sub) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              estado: "sin_sesion",
+              hay_datos: !vacia,
+              home: stackchatHome(),
+              siguiente:
+                "Pídele el cURL: que abra https://substack.com ya logueado, F12 → Network → Ctrl+R, " +
+                "clic derecho en la primera petición → Copy as cURL (bash), lo guarde en un archivo y te pase la ruta. " +
+                "Luego: stackchat connect --cookies <ruta>. No le pidas el subdominio ni te lo inventes.",
+              ...(vacia ? {} : { aviso: "Hay datos de una sesión anterior: puedes responder con ellos mientras tanto." }),
+            },
+            null,
+            1,
+          ) + "\n",
+        );
+        return;
+      }
+
+      // Con sesión: se actualiza solo lo que haga falta, siempre sin bloquear la respuesta.
+      const fresca = isFresh(db, Number.isFinite(horas) && horas >= 0 ? horas : 6);
+      const hayQueBajar = vacia || falta.length > 0 || !fresca;
+      let lanzado: string | null = null;
+      if (hayQueBajar) {
+        const args = [process.argv[1], "sync", ...(values.sub ? ["--sub", values.sub] : []), ...(values.db ? ["--db", values.db] : [])];
+        const pid = relaunchDetached(args);
+        lanzado = pid
+          ? `sync en segundo plano (pid ${pid})`
+          : "no se pudo lanzar en segundo plano; ejecuta `stackchat sync` a mano";
+      }
+
+      process.stdout.write(
+        JSON.stringify(
+          {
+            estado: vacia ? (hayQueBajar ? "descargando_por_primera_vez" : "sin_datos") : hayQueBajar ? "listo_actualizando" : "listo",
+            subdomain: sub,
+            publication_name: loadConfig()?.publication_name ?? null,
+            ultimo_sync: readLastSyncLog(),
+            faltan: falta,
+            actualizacion: lanzado,
+            siguiente: vacia
+              ? "El primer sync tarda 3-4 minutos por las notas. Dilo en una línea y sigue atendiendo; no lo esperes."
+              : "Responde ya con `stackchat q <consulta>`. Si lanzó un sync, dilo en una línea y no lo esperes.",
+            resumen: vacia ? null : getOverview(db),
+          },
+          null,
+          1,
+        ) + "\n",
+      );
+      return;
+    }
     case "sync": {
       const sub = resolveSubdomain(values.sub);
       const auth = loadAuth(authPath());
@@ -191,8 +266,13 @@ async function main() {
       // Desasociarse ANTES de trabajar: SessionStart bloquea la sesión hasta que el comando acaba.
       if (values.background) {
         const args = [process.argv[1], ...process.argv.slice(2).filter((a) => a !== "--background")];
-        log(`sync lanzado en segundo plano (pid ${relaunchDetached(args)})`);
-        return;
+        const pid = relaunchDetached(args);
+        if (!pid) {
+          log("No se pudo lanzar en segundo plano desde este punto de entrada; ejecutando aquí mismo.");
+        } else {
+          log(`sync lanzado en segundo plano (pid ${pid})`);
+          return;
+        }
       }
 
       // Un candado: con un hook global, tres sesiones abiertas lanzarían tres syncs simultáneos
