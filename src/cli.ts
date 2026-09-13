@@ -103,9 +103,14 @@ async function main() {
       const curlFile = resolve(values.cookies);
       const r = await connect(cookieFromCurl(readFileSync(curlFile, "utf8")), { subdomain: values.sub });
       if (!r.config) {
+        // La principal va primero y marcada: es la respuesta casi siempre, y así nadie tiene que
+        // adivinar cuál de tres subdominios corresponde al nombre que tiene en la cabeza.
+        const orden = [...r.needsChoice].sort((a, b) => Number(!!b.primary) - Number(!!a.primary));
         log(
           "Administras varias publicaciones. Repite eligiendo una con --sub:\n" +
-            r.needsChoice.map((p) => `  --sub ${p.subdomain}${p.name ? `   (${p.name})` : ""}`).join("\n"),
+            orden
+              .map((p) => `  --sub ${p.subdomain}${p.name ? `   (${p.name})` : ""}${p.primary ? "   [principal]" : ""}`)
+              .join("\n"),
         );
         process.exit(2);
       }

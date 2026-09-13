@@ -7540,16 +7540,23 @@ async function verifySession(cookie, fetchImpl = fetch) {
 }
 function extractPublications(me) {
   const found = /* @__PURE__ */ new Map();
-  const add = (p) => {
+  const add = (p, primary = false) => {
     const subdomain = p?.subdomain;
     if (typeof subdomain === "string" && subdomain) {
-      found.set(subdomain, { subdomain, name: p.name ?? null, id: p.id });
+      const prev = found.get(subdomain);
+      found.set(subdomain, { subdomain, name: p.name ?? prev?.name ?? null, id: p.id ?? prev?.id, primary: primary || prev?.primary });
     }
   };
-  add(me.primary_publication);
+  add(me.primaryPublication, true);
+  add(me.primary_publication, true);
   for (const key of ["publications", "publicationUsers", "publication_users", "userPublications"]) {
     const list = me[key];
-    if (Array.isArray(list)) for (const item of list) add(item?.publication ?? item);
+    if (Array.isArray(list)) {
+      for (const item of list) {
+        if (item?.role && item.role !== "admin") continue;
+        add(item?.publication ?? item);
+      }
+    }
   }
   return [...found.values()];
 }
@@ -7727,8 +7734,9 @@ ${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
       const curlFile = (0, import_node_path7.resolve)(values.cookies);
       const r = await connect(cookieFromCurl((0, import_node_fs8.readFileSync)(curlFile, "utf8")), { subdomain: values.sub });
       if (!r.config) {
+        const orden = [...r.needsChoice].sort((a, b) => Number(!!b.primary) - Number(!!a.primary));
         log(
-          "Administras varias publicaciones. Repite eligiendo una con --sub:\n" + r.needsChoice.map((p) => `  --sub ${p.subdomain}${p.name ? `   (${p.name})` : ""}`).join("\n")
+          "Administras varias publicaciones. Repite eligiendo una con --sub:\n" + orden.map((p) => `  --sub ${p.subdomain}${p.name ? `   (${p.name})` : ""}${p.primary ? "   [principal]" : ""}`).join("\n")
         );
         process.exit(2);
       }

@@ -9,9 +9,20 @@ extensión bloquea explícitamente la lectura de cookies (`[BLOCKED: Cookie/quer
 que trae datos, pero `sync` seguirá sin funcionar y habrá que repetir el paso 1 cada vez que quiera
 datos frescos. Dilo en una línea antes de empezar y sigue.
 
-**El subdominio no se pregunta.** Sale de `~/.stackchat/config.json` si ya conectó alguna vez, y si
-no, de la propia página: navega a `https://substack.com/publish/home`, que redirige a su
-publicación, y léelo de la URL. Pregunta solo si las dos cosas fallan.
+**El subdominio no se pregunta, y no se inventa.** No se deduce del nombre de la publicación:
+«Objeto Brillante» vive en `sotoplatero.substack.com`. Sale de `~/.stackchat/config.json` si ya
+conectó alguna vez, y si no, de la propia sesión: `navigate` a `https://substack.com` y pídelo con
+`javascript_tool`, que cabe de sobra en el tope de 1 KB.
+
+```js
+const p = await (await fetch('/api/v1/user/profile/self', {credentials:'include'})).json();
+JSON.stringify({ sub: p.primaryPublication && p.primaryPublication.subdomain,
+  admin: (p.publicationUsers||[]).filter(u=>u.role==='admin').map(u=>u.publication.subdomain) })
+```
+
+`primaryPublication` es la suya; `admin` lista todas las que administra, por si son varias y hay que
+preguntarle **cuál**, nunca cómo se escribe. Si eso falla, la sesión no vale: no sigas por aquí.
+Ojo con el nombre: la clave es `primaryPublication`, en camelCase, no `primary_publication`.
 
 ---
 

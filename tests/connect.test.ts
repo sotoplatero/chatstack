@@ -26,11 +26,42 @@ const THREE_PUBS = {
   ],
 };
 
+/** La forma real que devuelve Substack hoy: camelCase y con el rol en cada publicación. */
+const REAL = {
+  id: 7,
+  handle: "ana",
+  primaryPublication: { id: 9, subdomain: "anapost", name: "Nombre Bonito" },
+  publicationUsers: [
+    { role: "admin", publication: { id: 9, subdomain: "anapost", name: "Nombre Bonito" } },
+    { role: "admin", publication: { id: 10, subdomain: "perros", name: "Perros" } },
+    { role: "contributor", publication: { id: 11, subdomain: "ajena", name: "Ajena" } },
+  ],
+};
+
 describe("extractPublications", () => {
   it("junta y deduplica las publicaciones vengan en la forma que vengan", () => {
     expect(extractPublications(THREE_PUBS).map((p) => p.subdomain)).toEqual(["anapost", "perros", "otra"]);
-    expect(extractPublications(ONE_PUB)).toEqual([{ id: 1, subdomain: "anapost", name: "Ana Post" }]);
+    expect(extractPublications(ONE_PUB)).toEqual([{ id: 1, subdomain: "anapost", name: "Ana Post", primary: true }]);
     expect(extractPublications({ id: 1 })).toEqual([]);
+  });
+
+  it("lee `primaryPublication` en camelCase, que es la clave que devuelve Substack", () => {
+    // Solo se miraba `primary_publication`, así que la principal nunca se reconocía como tal y la
+    // detección dependía sin saberlo de que `publicationUsers` trajera subdominios.
+    const pubs = extractPublications(REAL);
+    expect(pubs.find((p) => p.primary)?.subdomain).toBe("anapost");
+  });
+
+  it("descarta las publicaciones donde no es admin", () => {
+    // Colaborar o estar suscrito no da acceso a las estadísticas; ofrecerla solo confunde.
+    expect(extractPublications(REAL).map((p) => p.subdomain)).toEqual(["anapost", "perros"]);
+  });
+
+  it("el nombre de la publicación no dice nada del subdominio", () => {
+    // El fallo que motivó esto: «Objeto Brillante» vive en `sotoplatero.substack.com`.
+    const pub = extractPublications(REAL).find((p) => p.primary)!;
+    expect(pub.name).toBe("Nombre Bonito");
+    expect(pub.subdomain).toBe("anapost");
   });
 });
 

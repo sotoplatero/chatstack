@@ -82,14 +82,21 @@ Solo si `status` dice `connected: false`. **Pide el cURL directamente**, no lo o
 opción entre varias: son cuatro pasos una sola vez en la vida, y a partir de ahí todo se sincroniza
 solo en segundo plano.
 
-1. Que abra en Chrome `https://<su-subdominio>.substack.com/publish/home`, ya logueado.
+1. Que abra en Chrome **`https://substack.com`**, con su cuenta ya iniciada.
 2. `F12` → pestaña **Network** → recargar con `Ctrl+R`.
 3. Clic derecho en la **primera petición** (el documento) → **Copy** → **Copy as cURL (bash)**.
 4. Que lo pegue en un archivo de texto y te pase **la ruta** (no el contenido: lleva su sesión).
 5. `$CS connect --cookies <ruta>` y luego `$CS sync --background`.
 
+**No le pidas su subdominio y no te lo inventes.** La sesión vale para todo `substack.com`, así que
+el cURL sale de la portada y `connect` averigua solo a qué publicación pertenece. **El subdominio no
+se deduce del nombre**: «Objeto Brillante» vive en `sotoplatero.substack.com`. Inventarlo lleva a
+una URL que no existe y a un callejón sin salida. Si administra varias publicaciones, `connect` las
+lista con su nombre y se elige con `--sub`.
+
 `connect` verifica la sesión y detecta la publicación antes de guardar nada. Dile que borre el
-archivo al terminar.
+archivo al terminar. Una vez conectado, el subdominio está en `$CS status`; hasta entonces, no lo
+sabes.
 
 **No intentes sacar la cookie del navegador: está comprobado que no se puede.** `substack.sid` es
 httpOnly, así que `document.cookie` no la incluye; `read_network_requests` no devuelve cabeceras; y

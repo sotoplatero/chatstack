@@ -14,6 +14,8 @@ export interface Publication {
   subdomain: string;
   name: string | null;
   id?: number;
+  /** La publicación principal del usuario. Con varias, es la que hay que ofrecer primero. */
+  primary?: boolean;
 }
 
 export interface Identity {
@@ -56,16 +58,27 @@ export async function verifySession(cookie: string, fetchImpl: typeof fetch = fe
  */
 export function extractPublications(me: Record<string, any>): Publication[] {
   const found = new Map<string, Publication>();
-  const add = (p: any) => {
+  const add = (p: any, primary = false) => {
     const subdomain = p?.subdomain;
     if (typeof subdomain === "string" && subdomain) {
-      found.set(subdomain, { subdomain, name: p.name ?? null, id: p.id });
+      const prev = found.get(subdomain);
+      found.set(subdomain, { subdomain, name: p.name ?? prev?.name ?? null, id: p.id ?? prev?.id, primary: primary || prev?.primary });
     }
   };
-  add(me.primary_publication);
+  // La clave real es `primaryPublication`, en camelCase. La versión en snake_case se conserva
+  // porque otras respuestas de Substack sí la usan, pero la de este endpoint nunca coincidía, y
+  // la detección dependía sin saberlo de `publicationUsers`.
+  add(me.primaryPublication, true);
+  add(me.primary_publication, true);
   for (const key of ["publications", "publicationUsers", "publication_users", "userPublications"]) {
     const list = me[key];
-    if (Array.isArray(list)) for (const item of list) add(item?.publication ?? item);
+    if (Array.isArray(list)) {
+      // Solo las que administra: estar suscrito a una publicación no da acceso a sus estadísticas.
+      for (const item of list) {
+        if (item?.role && item.role !== "admin") continue;
+        add(item?.publication ?? item);
+      }
+    }
   }
   return [...found.values()];
 }
