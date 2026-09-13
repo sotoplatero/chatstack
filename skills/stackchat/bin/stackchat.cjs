@@ -3043,14 +3043,17 @@ function knownNotes(db) {
   return { counts, withStats };
 }
 function coverage(db) {
-  return DATASETS.map(({ dataset, table, runColumn }) => {
+  const fetched = new Set(
+    db.prepare("SELECT DISTINCT kind FROM raw_files").all().map((r) => r.kind)
+  );
+  return DATASETS.map(({ dataset, table, runColumn, source }) => {
     const rows = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
     let last_run_id = null;
     if (runColumn && rows > 0) {
-      const r = db.prepare(`SELECT MAX(${runColumn}) AS r FROM ${table}`).get();
-      last_run_id = r.r ?? null;
+      last_run_id = db.prepare(`SELECT MAX(${runColumn}) AS r FROM ${table}`).get().r ?? null;
     }
-    return { dataset, rows, last_run_id, present: rows > 0 };
+    const ever_fetched = fetched.has(source);
+    return { dataset, rows, last_run_id, ever_fetched, missing: rows === 0 && !ever_fetched };
   });
 }
 var FORBIDDEN, DATASETS, missingDatasets;
@@ -3059,16 +3062,18 @@ var init_queries = __esm({
     "use strict";
     FORBIDDEN = /\b(insert|update|delete|drop|alter|create|attach|detach|pragma|vacuum|reindex|load_extension)\b|\breplace\s+into\b/i;
     DATASETS = [
-      { dataset: "subscribers", table: "subscribers", runColumn: "last_synced_run_id" },
-      { dataset: "posts", table: "posts" },
-      { dataset: "post_stats", table: "post_email_stats", runColumn: "run_id" },
-      { dataset: "growth", table: "growth_sources", runColumn: "run_id" },
-      { dataset: "traffic", table: "traffic", runColumn: "run_id" },
-      { dataset: "subscriber_totals", table: "subscriber_totals", runColumn: "run_id" },
-      { dataset: "notes", table: "notes", runColumn: "last_synced_run_id" },
-      { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id" }
+      { dataset: "subscribers", table: "subscribers", runColumn: "last_synced_run_id", source: "email_list" },
+      { dataset: "posts", table: "posts", source: "posts" },
+      { dataset: "post_stats", table: "post_email_stats", runColumn: "run_id", source: "email_stats" },
+      { dataset: "growth", table: "growth_sources", runColumn: "run_id", source: "growth_sources" },
+      { dataset: "traffic", table: "traffic", runColumn: "run_id", source: "traffic" },
+      { dataset: "subscriber_totals", table: "subscriber_totals", runColumn: "run_id", source: "subscriber_totals" },
+      { dataset: "subscriber_growth", table: "subscriber_growth_daily", runColumn: "run_id", source: "paid_subscriber_growth" },
+      { dataset: "notes", table: "notes", runColumn: "last_synced_run_id", source: "notes" },
+      // Las interacciones vienen dentro del mismo bundle que las notas.
+      { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id", source: "notes" }
     ];
-    missingDatasets = (db) => coverage(db).filter((c) => !c.present).map((c) => c.dataset);
+    missingDatasets = (db) => coverage(db).filter((c) => c.missing).map((c) => c.dataset);
   }
 });
 

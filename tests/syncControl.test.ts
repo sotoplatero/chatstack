@@ -215,19 +215,18 @@ describe("knownNotes lee de la BD lo que el incremental necesita", () => {
   });
 });
 
-describe("cobertura: qué hay y qué falta", () => {
+describe("cobertura: qué hay, qué falta y qué está vacío de verdad", () => {
   it("una base recién creada lo declara todo ausente", () => {
     const db = openDb(":memory:");
-    const cob = coverage(db);
-    expect(cob.every((c) => !c.present && c.rows === 0)).toBe(true);
-    // Es lo que permite al skill lanzar un sync sin que nadie se lo pida.
+    expect(coverage(db).every((c) => c.missing && c.rows === 0 && !c.ever_fetched)).toBe(true);
     expect(missingDatasets(db)).toContain("notes");
     expect(missingDatasets(db)).toContain("subscribers");
   });
 
-  it("marca presente solo lo que tiene filas, y de qué sync viene", () => {
+  it("marca presente lo que tiene filas, y de qué sync viene", () => {
     const db = openDb(":memory:");
     const runId = startRun(db, null);
+    db.prepare("INSERT INTO raw_files (run_id, kind, path, sha256, row_count) VALUES (?, 'notes', 'x', 'y', 1)").run(runId);
     loadNotes(db, runId, {
       kind: "notes",
       fetched_at: new Date().toISOString(),
@@ -245,11 +244,29 @@ describe("cobertura: qué hay y qué falta", () => {
     finishRun(db, runId, "ok");
 
     const por = Object.fromEntries(coverage(db).map((c) => [c.dataset, c]));
-    expect(por.notes).toMatchObject({ present: true, rows: 1, last_run_id: runId });
-    expect(por.note_interactions).toMatchObject({ present: true, rows: 1 });
-    // Los suscriptores siguen sin llegar: eso es exactamente lo que hay que poder detectar.
-    expect(por.subscribers.present).toBe(false);
+    expect(por.notes).toMatchObject({ missing: false, rows: 1, last_run_id: runId, ever_fetched: true });
+    expect(por.note_interactions).toMatchObject({ missing: false, rows: 1 });
+    expect(por.subscribers.missing).toBe(true);
     expect(missingDatasets(db)).toContain("subscribers");
     expect(missingDatasets(db)).not.toContain("notes");
+  });
+
+  it("una tabla vacía cuya fuente SÍ se descargó no cuenta como ausente", () => {
+    // El caso de quien nunca ha escrito una nota: pedirla otra vez no cambiaría nada, y sin esta
+    // distinción el skill lanzaría un sync en cada pregunta, para siempre.
+    const db = openDb(":memory:");
+    const runId = startRun(db, null);
+    db.prepare("INSERT INTO raw_files (run_id, kind, path, sha256, row_count) VALUES (?, 'notes', 'x', 'y', 0)").run(runId);
+    finishRun(db, runId, "ok");
+
+    const por = Object.fromEntries(coverage(db).map((c) => [c.dataset, c]));
+    expect(por.notes).toMatchObject({ rows: 0, ever_fetched: true, missing: false });
+    expect(missingDatasets(db)).not.toContain("notes");
+    // Lo que de verdad no se ha traído sigue apareciendo.
+    expect(missingDatasets(db)).toContain("subscribers");
+  });
+
+  it("cubre subscriber_growth, que el esquema documentaba y la cobertura ignoraba", () => {
+    expect(coverage(openDb(":memory:")).map((c) => c.dataset)).toContain("subscriber_growth");
   });
 });

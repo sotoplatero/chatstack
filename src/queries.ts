@@ -387,40 +387,55 @@ export function knownNotes(db: Db): { counts: Map<number, { reaction_count: numb
 }
 
 /**
- * Qué datos hay y de qué sync vienen. Es lo que permite al skill darse cuenta por su cuenta de
- * que falta algo —las notas, por ejemplo— y lanzar un sync sin que el usuario tenga que pedirlo.
+ * Qué datos hay, de dónde vinieron y si alguna vez se intentó traerlos.
+ *
+ * La distinción que importa: una tabla vacía puede significar «nunca se descargó» o «se descargó
+ * y no había nada» — quien nunca ha escrito una nota tendrá `notes` a cero para siempre. Sin
+ * separarlas, el skill lanzaría un sync en cada pregunta eternamente. `raw_files` registra qué
+ * se ingirió en cada run, así que sirve de testigo.
  */
 export interface Coverage {
   dataset: string;
   rows: number;
   /** Sync del que provienen las filas, cuando la tabla lo registra. */
   last_run_id: number | null;
-  present: boolean;
+  /** Si alguna vez se ingirió su fuente, aunque viniera vacía. */
+  ever_fetched: boolean;
+  /** Vacío Y nunca descargado: lo único que justifica lanzar un sync. */
+  missing: boolean;
 }
 
-/** Tabla → cómo se llama de cara al usuario y de qué columna sale el run que la llenó. */
-const DATASETS: { dataset: string; table: string; runColumn?: string }[] = [
-  { dataset: "subscribers", table: "subscribers", runColumn: "last_synced_run_id" },
-  { dataset: "posts", table: "posts" },
-  { dataset: "post_stats", table: "post_email_stats", runColumn: "run_id" },
-  { dataset: "growth", table: "growth_sources", runColumn: "run_id" },
-  { dataset: "traffic", table: "traffic", runColumn: "run_id" },
-  { dataset: "subscriber_totals", table: "subscriber_totals", runColumn: "run_id" },
-  { dataset: "notes", table: "notes", runColumn: "last_synced_run_id" },
-  { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id" },
+/** Tabla → nombre de cara al usuario, columna del run, y el `kind` de `raw_files` que la llena. */
+const DATASETS: { dataset: string; table: string; runColumn?: string; source: string }[] = [
+  { dataset: "subscribers", table: "subscribers", runColumn: "last_synced_run_id", source: "email_list" },
+  { dataset: "posts", table: "posts", source: "posts" },
+  { dataset: "post_stats", table: "post_email_stats", runColumn: "run_id", source: "email_stats" },
+  { dataset: "growth", table: "growth_sources", runColumn: "run_id", source: "growth_sources" },
+  { dataset: "traffic", table: "traffic", runColumn: "run_id", source: "traffic" },
+  { dataset: "subscriber_totals", table: "subscriber_totals", runColumn: "run_id", source: "subscriber_totals" },
+  { dataset: "subscriber_growth", table: "subscriber_growth_daily", runColumn: "run_id", source: "paid_subscriber_growth" },
+  { dataset: "notes", table: "notes", runColumn: "last_synced_run_id", source: "notes" },
+  // Las interacciones vienen dentro del mismo bundle que las notas.
+  { dataset: "note_interactions", table: "note_interactions", runColumn: "run_id", source: "notes" },
 ];
 
 export function coverage(db: Db): Coverage[] {
-  return DATASETS.map(({ dataset, table, runColumn }) => {
+  const fetched = new Set(
+    (db.prepare("SELECT DISTINCT kind FROM raw_files").all() as { kind: string }[]).map((r) => r.kind),
+  );
+  return DATASETS.map(({ dataset, table, runColumn, source }) => {
     const rows = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
     let last_run_id: number | null = null;
     if (runColumn && rows > 0) {
-      const r = db.prepare(`SELECT MAX(${runColumn}) AS r FROM ${table}`).get() as { r: number | null };
-      last_run_id = r.r ?? null;
+      last_run_id = (db.prepare(`SELECT MAX(${runColumn}) AS r FROM ${table}`).get() as { r: number | null }).r ?? null;
     }
-    return { dataset, rows, last_run_id, present: rows > 0 };
+    const ever_fetched = fetched.has(source);
+    return { dataset, rows, last_run_id, ever_fetched, missing: rows === 0 && !ever_fetched };
   });
 }
 
-/** Los conjuntos que están vacíos. Vacío = nunca se descargó, o el sync que lo traía falló. */
-export const missingDatasets = (db: Db): string[] => coverage(db).filter((c) => !c.present).map((c) => c.dataset);
+/**
+ * Conjuntos que nunca se han descargado. Una tabla vacía cuya fuente sí se ingirió NO sale aquí:
+ * el usuario simplemente no tiene esos datos, y volver a pedirlos no cambiaría nada.
+ */
+export const missingDatasets = (db: Db): string[] => coverage(db).filter((c) => c.missing).map((c) => c.dataset);

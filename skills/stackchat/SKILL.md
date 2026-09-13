@@ -1,16 +1,13 @@
 ---
 name: stackchat
 description: >-
-  Responde preguntas sobre el Substack del usuario consultando una base de datos
-  local con sus suscriptores, posts, crecimiento y Notes: cuántos suscriptores
-  tiene y de dónde vienen, quién abre sus correos y quién no, quién es candidato
-  a pasar a pago, qué posts convierten mejor, quién se dio de baja, y quién da
-  like, restackea o responde a sus notas. Úsalo SIEMPRE que pregunte por sus
-  suscriptores, su newsletter, sus lectores, sus aperturas, su crecimiento, sus
-  altas o bajas, sus posts o sus notas — basta con que diga "mis suscriptores",
-  "mi newsletter", "quién me lee" o "mis notas", sin nombrar Substack. También
-  para conectar su cuenta la primera vez y para refrescar los datos
-  ("actualiza", "sincroniza"). Es de solo lectura: no publica ni modifica nada.
+  Responde preguntas sobre el Substack del usuario a partir de una base local:
+  suscriptores y de dónde vienen, quién abre sus correos y quién no, candidatos a
+  pasar a pago, qué posts convierten, quién se dio de baja, y quién da like,
+  restackea o responde a sus notas. Úsalo siempre que hable de sus suscriptores,
+  su newsletter, sus lectores, sus aperturas, su crecimiento, sus posts o sus
+  notas, aunque no nombre Substack; también para conectar su cuenta y para
+  actualizar o sincronizar los datos. Es de solo lectura.
 ---
 
 # stackchat
@@ -52,18 +49,29 @@ Datos y configuración viven en `~/.stackchat/` (`config.json`, `auth.json`, `st
 Una llamada a `$CS status`. Es local y cuesta milisegundos. Te dice tres cosas:
 
 - `connected` — si hay sesión guardada.
-- `missing` — qué conjuntos de datos están vacíos.
+- `missing` — qué conjuntos **nunca se han descargado**. Una tabla vacía cuya fuente sí se
+  descargó no sale aquí: el usuario simplemente no tiene esos datos (no ha escrito notas, no tiene
+  suscriptores de pago) y volver a pedirlos no cambiaría nada.
 - `last_sync` y `last_background_sync` — cuándo se llenaron y si el último intento falló.
 
-Y decides con esta tabla, **sin preguntarle nada al usuario**:
+```json
+{ "connected": true, "subdomain": "sotoplatero",
+  "last_sync": { "id": 14, "finished_at": "2026-09-12T14:49:40Z", "status": "ok" },
+  "last_background_sync": "2026-09-12T14:49:40Z sync #14 ok",
+  "missing": [],
+  "coverage": [ { "dataset": "notes", "rows": 237, "ever_fetched": true, "missing": false } ] }
+```
+
+Y decides con esta tabla, **sin preguntarle nada al usuario**. Se lee en orden: la primera fila
+que encaje manda.
 
 | `status` dice | Qué haces |
 |---|---|
-| `connected: false` | Pedir el cURL (abajo). Es lo único que requiere al usuario. |
+| `connected: false` | Pedir el cURL (abajo). Sin sesión guardada `sync` no funciona, aunque ya haya datos de una sesión anterior por el navegador. |
 | Falta lo que la pregunta necesita | `$CS sync --background` y **responde igual**, con lo que haya |
 | Todo presente pero `last_sync` de hace >6 h | `$CS sync --if-stale 6 --background` y responde sin esperar |
 | Todo presente y fresco | Responde y ya |
-| `last_background_sync` dice que falló | Dilo y ofrece reconectar. **No relances en bucle.** |
+| `last_background_sync` dice que falló | Dilo y pide el cURL nuevo. **No relances en bucle.** |
 
 `sync --background` devuelve en ~300 ms: se desasocia y sigue por su cuenta. **Nunca lo esperes,
 nunca sondees, nunca digas «dame un momento».** Responde con los datos que existan y añade una
@@ -102,55 +110,22 @@ las lista: repite con `--sub <subdominio>`. **Dile que borre el archivo al termi
 El primer `sync` tarda 3-4 minutos porque recorre todas las notas. Lánzalo con `--background` y
 sigue atendiendo: las estadísticas y los suscriptores estarán en segundos, las notas al final.
 
-### Si se niega a tocar DevTools: la vía del navegador
+### Si se niega a tocar DevTools
 
-Solo entonces, y solo si existen herramientas `mcp__claude-in-chrome__*`. Funciona, pero exige que
-estés encima en cada sincronización, gasta contexto y abre ventanas de descarga. Adviértele de eso
-antes de empezar.
-
-Pregunta el subdominio si no lo sabes (o léelo de `~/.stackchat/config.json`).
-
-**1. Estadísticas de la publicación**
-
-- `navigate` a `https://<subdominio>.substack.com/publish/home`
-- `javascript_tool` con el contenido de **`<SKILL_DIR>/browser/01-publication.js`**.
-  Devuelve enseguida `{arrancado}`: la página sigue trabajando sola.
-- **No te quedes esperando.** Dile al usuario que tarda alrededor de un minuto y sigue atendiéndole.
-  Comprueba `window.__stackchat` cuando vuelvas a intervenir; si `listo` es `true`, recógelo.
-- Lee `window.__stackchat.datos`, guárdalo con Write en
-  `<carpeta temporal>/stackchat-publication.json` y ejecuta `$CS load <carpeta temporal>`.
-
-**2. El CSV de suscriptores** — aquí hay una descarga del navegador, avísale
-
-`window.__stackchat.datos.email_list_url` trae un enlace absoluto. No se puede leer con `fetch`
-(redirige a S3 y CORS lo corta), así que hay que descargarlo navegando a esa URL.
-
-**Dile antes de hacerlo**: «voy a abrir el enlace del export; Chrome lo va a descargar, y si te
-pide permiso acéptalo». Después `navigate` a la URL, y **comprueba que el archivo llegó** a la
-carpeta de descargas antes de seguir. Si no aparece en unos segundos, díselo claramente: Chrome
-bloquea las descargas automáticas de un sitio tras la primera, y hace falta que lo permita a mano.
-No des por hecho que se descargó.
-
-Cuando esté, muévelo a la carpeta temporal y vuelve a ejecutar `$CS load`.
-
-**3. Notes**
-
-- `navigate` a `https://substack.com`
-- `javascript_tool` con **`<SKILL_DIR>/browser/02-notes.js`**.
-- Con 200+ notas tarda varios minutos. **Tampoco esperes**: avisa, sigue respondiendo, y recógelo
-  cuando vuelvas a intervenir. `progreso` marca `hechas/total` si quieres informar del avance.
-- Lee `window.__stackchat.datos`, guárdalo como `stackchat-notes.json` y `$CS load <carpeta>`.
-
-Los datos vuelven por el resultado del tool, no por descargas. **Cuesta contexto**: las
-estadísticas rondan los 25 KB, pero el bundle de Notes pasa de 400 KB con 200+ notas.
-
-**Al terminar, ofrécele pasar al cURL** para que los siguientes syncs sean automáticos.
+Hay una vía alternativa con Claude in Chrome, sin pegar nada: las peticiones salen desde la propia
+página, que ya está autenticada. Funciona, pero exige que estés encima en cada sincronización,
+gasta contexto y abre ventanas de descarga. Úsala solo si el usuario rechaza el cURL y existen
+herramientas `mcp__claude-in-chrome__*`; los pasos están en **`<SKILL_DIR>/navegador.md`**, léelo
+entonces.
 
 ## Refrescar
 
 `$CS sync` es **incremental** por defecto: compara los contadores que el feed ya devuelve gratis con
 lo que hay en la BD y solo pide las interacciones de las notas que cambiaron, además de acortar el
 rango de las series. Unos 10 s sin novedades, frente a 3-4 min de `--full`.
+
+`--full` solo hace falta si algo se ve inconsistente —contadores que no cuadran con lo que el
+usuario ve en Substack— o tras un `partial` que no se arregla repitiendo. No lo lances por rutina.
 
 Para que los datos estén frescos sin pedirlo, un hook de `SessionStart`:
 
@@ -180,7 +155,7 @@ del navegador, o dar el cURL una vez y olvidarse.
 
 | Consulta | Qué devuelve | Flags |
 |---|---|---|
-| `overview` | Totales, reparto por plan, altas 30/90d, último sync. **Empieza aquí.** | — |
+| `overview` | Totales, reparto por plan, altas 30/90d, último sync | — |
 | `subscribers` | Contactos con filtros | `--plan free\|paid\|monthly\|yearly` `--active true\|false` `--after YYYY-MM-DD` `--before` `--email texto` `--limit` `--offset` |
 | `subscriber` | Ficha de un contacto + historial de plan | `--email alguien@ejemplo.com` |
 | `candidates` | Free activos ordenados como candidatos a pago | `--limit` `--min-days` |
@@ -190,7 +165,7 @@ del navegador, o dar el cURL una vez y olvidarse.
 | `notes` | Tus Notes con likes, restacks, respuestas, personas únicas | `--sort interactions\|date\|reactions\|restacks\|replies` `--limit` |
 | `note-engagers` | **Quién interactúa más con tus Notes** | `--limit` `--kind like\|restack\|reply` |
 | `note` | Una Note con su texto y cada interacción con su persona | `--id 332284631` |
-| `schema` | Tablas, DDL y conteos | — |
+| `schema` | Tablas, DDL y conteos. Rara vez hace falta: el esquema está más abajo | — |
 
 Un nombre equivocado imprime la lista de nombres válidos; un flag fuera de su lista cerrada dice
 qué se esperaba. Los errores de uso salen con código 2.
@@ -215,7 +190,13 @@ post_email_stats   post_id, run_id, title, post_date, views, open_rate, engageme
 growth_sources     date, source, category, unique_visitors, new_subscribers, new_revenue
 traffic            date(PK), views
 subscriber_totals  date(PK), total_subscribers
-subscriber_growth_daily  date(PK), new_free, unsubscribes, new_paid, upgrades, cancellations_*
+subscriber_growth_daily  date(PK), new_paid, upgrades, trials_started, cancellations_*
+                   OJO: new_free y unsubscribes existen como columnas, pero `sync` NUNCA las
+                   rellena — no se encontró el endpoint de la serie gratuita. Solo tienen valor
+                   si alguien cargó a mano un free_subscriber_growth.csv exportado del panel, así
+                   que suelen estar a null y, si no, cubren un tramo suelto. Comprueba antes de
+                   usarlas. Para altas free lo fiable es growth_sources.new_subscribers; para
+                   bajas, subscribers.unsubscribed_at.
 notes              note_id(PK), date, body, reaction_count, restacks, replies_count,
                    attachments(JSON), stats(JSON)
 note_actors        user_id(PK), name, handle, publication_subdomain, publication_name, is_following
@@ -251,9 +232,10 @@ Para «¿quién ha abierto todos mis correos?» compara `Unique emails seen (6mo
 
 ## Si algo falla
 
-- `connected: false` o «la sesión ha caducado» → volver a conectar (vía A o B).
+- `connected: false` o «la sesión ha caducado» → pedirle el cURL otra vez.
 - Un `sync` puede acabar `partial`: Substack devuelve 503 y 429 esporádicos. Lo descargado se carga
   igual; repetir más tarde completa el resto.
-- En la vía A, si `window.__stackchat.error` trae algo, cuéntalo tal cual y ofrece la vía B.
+- En la vía del navegador, si `window.__stackchat.error` trae algo, cuéntalo tal cual y pásate
+  al cURL.
 - Substack cambia sus endpoints internos sin avisar. Si una descarga concreta falla siempre, dilo
   claramente en vez de inventar el dato que falta.
