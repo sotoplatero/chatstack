@@ -205,9 +205,12 @@ export function loadUnsubscribesDaily(db: Db, runId: number, rows: Row[]): LoadR
 export function deriveFreeGrowth(db: Db, runId: number): number {
   const rows = db
     .prepare(
+      // Cuenta a quien hoy es free y también a quien entró gratis y pagó después (su plan empezó
+      // más tarde que su suscripción). Quien llegó pagando desde el primer día no era un alta free.
       `SELECT substr(subscribed_at, 1, 10) AS date, COUNT(*) AS n
          FROM subscribers
-        WHERE subscribed_at IS NOT NULL AND plan = 'free'
+        WHERE subscribed_at IS NOT NULL
+          AND (plan = 'free' OR (plan_since IS NOT NULL AND plan_since > subscribed_at))
         GROUP BY date`,
     )
     .all() as { date: string; n: number }[];

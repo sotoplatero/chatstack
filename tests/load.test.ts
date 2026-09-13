@@ -220,9 +220,11 @@ describe("loadDirectory", () => {
     const filas = db
       .prepare("SELECT date, new_free FROM subscriber_growth_daily WHERE new_free IS NOT NULL ORDER BY date")
       .all() as { date: string; new_free: number }[];
-    // Substack no expone la serie de altas free; sale de los propios suscriptores.
+    // Substack no expone la serie de altas free; sale de los propios suscriptores. b@x.com cuenta
+    // aunque hoy sea de pago: entró gratis el 1 de junio y pagó un mes y medio después.
     expect(filas).toEqual([
       { date: "2026-05-01", new_free: 1 },
+      { date: "2026-06-01", new_free: 1 },
       { date: "2026-07-01", new_free: 1 },
     ]);
   });
