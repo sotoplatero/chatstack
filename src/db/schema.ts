@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS subscriber_snapshots (
   extra TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (run_id, email)
 );
+-- churn compara cada snapshot con el siguiente del mismo contacto. Sin este índice esa
+-- comparación recorre la tabla entera por cada fila.
+CREATE INDEX IF NOT EXISTS idx_snapshots_email ON subscriber_snapshots(email, run_id);
 
 CREATE TABLE IF NOT EXISTS posts (
   post_id TEXT PRIMARY KEY,
@@ -53,6 +56,8 @@ CREATE TABLE IF NOT EXISTS posts (
   type TEXT,
   audience TEXT,
   slug TEXT,
+  wordcount INTEGER,
+  last_synced_run_id INTEGER REFERENCES sync_runs(id),
   extra TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_posts_post_date ON posts(post_date);
@@ -70,6 +75,19 @@ CREATE TABLE IF NOT EXISTS post_email_stats (
   subscribes INTEGER,
   estimated_value REAL,
   open_rate REAL,
+  sent INTEGER,
+  delivered INTEGER,
+  opens INTEGER,
+  opened INTEGER,
+  clicks INTEGER,
+  clicked INTEGER,
+  click_rate REAL,
+  likes INTEGER,
+  comments INTEGER,
+  shares INTEGER,
+  restacks INTEGER,
+  unsubscribes INTEGER,
+  finished_post INTEGER,
   extra TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (post_id, run_id)
 );
@@ -138,6 +156,84 @@ CREATE TABLE IF NOT EXISTS note_interactions (
   PRIMARY KEY (note_id, actor_user_id, kind, reply_id)
 );
 CREATE INDEX IF NOT EXISTS idx_note_interactions_actor ON note_interactions(actor_user_id);
+
+-- Serie diaria de seguidores: gente que sigue la publicación sin estar suscrita.
+CREATE TABLE IF NOT EXISTS followers_daily (
+  date TEXT PRIMARY KEY,
+  followers INTEGER NOT NULL,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Bajas con su fecha real, tal como las lista el panel. subscribers.unsubscribed_at solo tiene
+-- fecha fiable para quien sigue apareciendo en el export; esta tabla no depende de eso.
+CREATE TABLE IF NOT EXISTS unsubscribes (
+  email TEXT NOT NULL,
+  unsubscribed_at TEXT,
+  subscribed_at TEXT,
+  plan TEXT,
+  source TEXT,
+  name TEXT,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+  PRIMARY KEY (email, unsubscribed_at)
+);
+
+-- Fuentes de visita del rango completo, con altas por fuente. Es una foto, no una serie:
+-- cada sync la reemplaza entera.
+CREATE TABLE IF NOT EXISTS visitor_sources (
+  source TEXT PRIMARY KEY,
+  category TEXT,
+  views INTEGER NOT NULL DEFAULT 0,
+  users INTEGER NOT NULL DEFAULT 0,
+  free_signups INTEGER NOT NULL DEFAULT 0,
+  subscribed INTEGER NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Cuánto de la audiencia llega por la red de Substack y cuánto de fuera.
+CREATE TABLE IF NOT EXISTS network_attribution (
+  label TEXT NOT NULL,
+  time_window TEXT NOT NULL,
+  subscribers INTEGER NOT NULL DEFAULT 0,
+  pct_of_total REAL,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+  PRIMARY KEY (label, time_window)
+);
+
+CREATE TABLE IF NOT EXISTS audience_location (
+  location TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value INTEGER NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+  PRIMARY KEY (location, metric)
+);
+
+-- Publicaciones que comparten audiencia contigo: candidatas a recomendación cruzada.
+CREATE TABLE IF NOT EXISTS audience_overlap (
+  subdomain TEXT PRIMARY KEY,
+  name TEXT,
+  author TEXT,
+  percent_overlap REAL NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Quién te trae lectores.
+CREATE TABLE IF NOT EXISTS referrers (
+  user_id TEXT PRIMARY KEY,
+  name TEXT,
+  handle TEXT,
+  visitors INTEGER NOT NULL DEFAULT 0,
+  free_subscribers INTEGER NOT NULL DEFAULT 0,
+  paid_subscribers INTEGER NOT NULL DEFAULT 0,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
+
+-- Las cifras sueltas del panel (retención, referidos, apertura y visitas de 30 días) en
+-- clave/valor, para no inventar una tabla por número.
+CREATE TABLE IF NOT EXISTS pub_summary (
+  metric TEXT PRIMARY KEY,
+  value TEXT,
+  run_id INTEGER NOT NULL REFERENCES sync_runs(id)
+);
 
 CREATE TABLE IF NOT EXISTS subscriber_growth_daily (
   date TEXT PRIMARY KEY,

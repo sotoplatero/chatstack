@@ -62,7 +62,11 @@ function fakeSubstack() {
     const path = url.replace(/^https:\/\/[^/]+/, "");
     if (path.startsWith("/api/v1/publication/stats/email_stats")) {
       if (emailStatsCalls++ === 0) return text("", 503);
-      return text("title,post_date,audience,views,engagement_rate,signups,subscribes,estimated_value,open_rate\nA,2026-07-18T00:00:00.000Z,everyone,1,0.1,0,0,0,0.5\n");
+      return text(
+        "post_id,title,post_date,audience,type,sent,delivered,opens,opened,open_rate,clicks,clicked,click_through_rate," +
+          "likes,comments,shares,restacks,unsubscribes,subscribers_finished_post,views,engagement_rate,signups,subscribes,estimated_value\n" +
+          "1,A,2026-07-18T00:00:00.000Z,everyone,newsletter,116,115,57,32,0.5,9,6,0.19,9,5,2,1,0,3,1,0.1,0,0,0\n",
+      );
     }
     if (path.startsWith("/api/v1/publication/stats/publication_traffic/timeseries")) {
       const from = new URL(url).searchParams.get("from")!.replace(/-/g, "/");
@@ -80,6 +84,36 @@ function fakeSubstack() {
     }
     if (path === "/api/v1/subscriber_set/export/exp1/file")
       return text("Email,Name,Stripe plan,Cancel date,Start date,Paid upgrade date,Activity,Type\na@x.com,Ana,,,2026-06-17T10:21:38.759Z,,4,Free\n");
+    if (path.startsWith("/api/v1/publication/stats/followers/timeseries")) return text("2026/06/10,2\n2026/06/11,3\n");
+    if (path.startsWith("/api/v1/publication/stats/unsubscribes/timeseries")) return json({ rows: [{ date: "2026/08/01", count: 2 }] });
+    if (path.startsWith("/api/v1/publication/stats/unsubscribes")) {
+      const offset = Number(new URL(url).searchParams.get("offset"));
+      return json(
+        offset === 0
+          ? { rows: [{ email: "ida@x.com", unsubscribed_at: "2026-08-01T00:00:00.000Z", type: "free" }], total: 1 }
+          : { rows: [], total: 1 },
+      );
+    }
+    if (path.startsWith("/api/v1/publication/stats/visitor_sources"))
+      return text("source,source_category,views,users,free_signup,subscribed\ndirect,Direct,10,5,1,0\n");
+    if (path.startsWith("/api/v1/publication/stats/network_attribution"))
+      return json({ rows: [{ label: "Substack App", time_window: "90 days", subs_count: 90, pct_time_window_total: 0.7 }] });
+    if (path.startsWith("/api/v1/publication/stats/audience_insights/location"))
+      return json([{ location: "ES", metric: "free signups", value: 59 }]);
+    if (path.startsWith("/api/v1/publication/stats/audience_insights/overlap"))
+      return json([{ percentOverlap: "0.37", pub: { subdomain: "otra", name: "Otra", author_name: "Alguien" } }]);
+    if (path.startsWith("/api/v1/publication/stats/reader-referrals")) {
+      const offset = Number(new URL(url).searchParams.get("offset"));
+      return json(
+        offset === 0
+          ? { rows: [{ referrer_user_id: 7, visitors: 3, free_subscribers: 1, paid_subscribers: 0, user: { id: 7, name: "Quien", handle: "quien" } }] }
+          : { rows: [] },
+      );
+    }
+    if (path.startsWith("/api/v1/publication/stats/subscriber_retention/summary")) return json({ heroStat: { rate: 0.9 } });
+    if (path.startsWith("/api/v1/publication/stats/referrals/summary")) return json({ gifts_sent: 0 });
+    if (path.startsWith("/api/v1/publication/stats/email_stats/30d_open_rate")) return json({ openRate: 31.7 });
+    if (path.startsWith("/api/v1/publication/stats/publication_traffic/30d_views")) return json({ views30d: 2377 });
     if (path === "/api/v1/user/profile/self") return json({ id: 1, name: "Yo", handle: "yo" });
     if (path.startsWith("/api/v1/reader/feed/profile/")) return json({ items: [], nextCursor: "" });
     if (path.startsWith("/api/v1/archive")) {
@@ -103,13 +137,17 @@ describe("dateChunks", () => {
 });
 
 describe("ingestSubstack", () => {
-  it("descarga los 8 exports por API, reintenta 503 y produce CSV que el loader reconoce", async () => {
+  it("descarga todos los exports por API, reintenta 503 y produce CSV que el loader reconoce", async () => {
     const { fetchImpl, seen } = fakeSubstack();
     const rawDir = mkdtempSync(join(tmpdir(), "stackchat-ing-"));
     const rep = await ingestSubstack({ subdomain: "x", rawDir, cookie: "substack.sid=s", fetchImpl, delays: { retryBaseMs: 1, pollMs: 1, pauseMs: 0 } });
     expect(rep.failed).toEqual([]);
     expect(rep.downloaded.map((d) => d.kind).sort()).toEqual(
-      ["email_list", "email_stats", "growth_sources", "notes", "paid_subscriber_growth", "posts", "subscriber_totals", "traffic"].sort(),
+      [
+        "audience_location", "audience_overlap", "email_list", "email_stats", "followers", "growth_sources",
+        "network_attribution", "notes", "paid_subscriber_growth", "posts", "pub_summary", "referrers",
+        "subscriber_totals", "traffic", "unsubscribes", "unsubscribes_daily", "visitor_sources",
+      ].sort(),
     );
     for (const d of rep.downloaded.filter((d) => d.kind !== "notes")) {
       expect(existsSync(d.path)).toBe(true);
@@ -121,8 +159,10 @@ describe("ingestSubstack", () => {
     expect(seen.every((s) => (s as any).url.includes("substack.com") || s.url.startsWith("/"))).toBe(true);
     const traffic = readFileSync(join(rawDir, "traffic.csv"), "utf8").trim().split("\n");
     expect(traffic[0]).toBe("Date,Views");
-    expect(traffic.length).toBeGreaterThan(5); // varios tramos de 90 días concatenados bajo una sola cabecera
-    expect(traffic.filter((l) => l === "Date,Views")).toHaveLength(1);
+    // `resolution=day` conserva el detalle diario, así que el rango entero cabe en una petición.
+    const trafficCalls = seen.filter((s) => s.url.includes("publication_traffic/timeseries"));
+    expect(trafficCalls).toHaveLength(1);
+    expect(trafficCalls[0].url).toContain("resolution=day");
     const posts = readFileSync(join(rawDir, "posts.csv"), "utf8");
     expect(posts).toContain('"A, con coma"');
     expect(posts.split("\n")[1]).toMatch(/^1\.a,2026-07-18/);

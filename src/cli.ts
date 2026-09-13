@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { resolve, join } from "node:path";
 import { readFileSync } from "node:fs";
-import { openDb } from "./db/index.js";
+import { markRunPartial, openDb } from "./db/index.js";
 import { loadDirectory, type RunReport } from "./load/index.js";
 import { ingestSubstack } from "./ingest/substack.js";
 import { cookieFromCurl, loadAuth } from "./ingest/auth.js";
@@ -246,6 +246,15 @@ async function runSync(o: {
   }
   const rep = loadDirectory(o.db, dir);
   printReport(rep, o.log);
+  /**
+   * Una descarga que falló deja un conjunto sin actualizar, y eso es exactamente lo que significa
+   * `partial`. Sin esto el run quedaba `ok`, `--if-stale` lo daba por bueno y esa fuente no se
+   * reintentaba en horas, sin que nadie lo supiera.
+   */
+  if (ingest.failed.length && rep.status === "ok") {
+    markRunPartial(o.db, rep.runId, ingest.failed.map((f) => `${f.kind}: ${f.error}`).join("\n"));
+    rep.status = "partial";
+  }
   writeSyncLog(
     `sync #${rep.runId} ${rep.status}${ingest.failed.length ? ` (${ingest.failed.length} fuentes fallaron)` : ""}`,
   );

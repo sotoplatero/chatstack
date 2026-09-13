@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { openDb } from "../src/db/index.js";
+import { openDb, startRun } from "../src/db/index.js";
 import { loadDirectory } from "../src/load/index.js";
-import { collectNotes, type NotesBundle } from "../src/ingest/notes.js";
+import { loadNotes } from "../src/load/notes.js";
+import { collectNotes, type NoteRecord, type NotesBundle } from "../src/ingest/notes.js";
 import { SubstackClient } from "../src/ingest/substack.js";
 import * as q from "../src/queries.js";
 
@@ -106,6 +107,62 @@ describe("bundle stackchat-files (vía navegador)", () => {
     expect(rep.status).toBe("ok");
     expect(rep.files.find((f) => f.path.endsWith("otra-cosa.json"))!.error).toMatch(/kind/);
     expect(db.prepare("SELECT COUNT(*) c FROM traffic").get()).toEqual({ c: 1 });
+  });
+});
+
+describe("una petición fallida no borra lo que ya estaba", () => {
+  const nota = (extra: Partial<NoteRecord> = {}): NoteRecord => ({
+    id: 100,
+    user_id: 1,
+    date: "2026-09-01T00:00:00.000Z",
+    body: "x",
+    reaction_count: 2,
+    restacks: 0,
+    children_count: 0,
+    attachments: [],
+    reactors: [
+      { id: 7, name: "Ana", handle: "ana", photo_url: null, publication_subdomain: null, publication_name: null, is_subscribed: null, is_following: null, bestseller_tier: null },
+      { id: 8, name: "Bob", handle: "bob", photo_url: null, publication_subdomain: null, publication_name: null, is_subscribed: null, is_following: null, bestseller_tier: null },
+    ],
+    restackers: [],
+    replies: [],
+    stats: null,
+    ...extra,
+  });
+  const bundle = (n: NoteRecord): NotesBundle => ({
+    kind: "notes",
+    fetched_at: "2026-09-13T00:00:00.000Z",
+    user_id: 1,
+    notes: [n],
+    errors: [],
+  });
+
+  it("conserva los likes y no da la nota por actualizada", () => {
+    const db = openDb(":memory:");
+    const run1 = startRun(db, null);
+    loadNotes(db, run1, bundle(nota()));
+    expect(db.prepare("SELECT COUNT(*) c FROM note_interactions WHERE kind = 'like'").get()).toEqual({ c: 2 });
+
+    // Segundo sync: la petición de likes falla, así que llegan cero reactores y un contador nuevo.
+    const run2 = startRun(db, null);
+    loadNotes(db, run2, bundle(nota({ reaction_count: 5, reactors: [], failed: ["reactors"] })));
+
+    // Los likes anteriores siguen ahí…
+    expect(db.prepare("SELECT COUNT(*) c FROM note_interactions WHERE kind = 'like'").get()).toEqual({ c: 2 });
+    // …y el contador no se ha pisado, para que el incremental vuelva a intentarlo.
+    expect(db.prepare("SELECT reaction_count FROM notes WHERE note_id = 100").get()).toEqual({ reaction_count: 2 });
+  });
+
+  it("si la petición va bien, quien quitó el like desaparece", () => {
+    const db = openDb(":memory:");
+    loadNotes(db, startRun(db, null), bundle(nota()));
+    const solaAna = nota({
+      reaction_count: 1,
+      reactors: [{ id: 7, name: "Ana", handle: "ana", photo_url: null, publication_subdomain: null, publication_name: null, is_subscribed: null, is_following: null, bestseller_tier: null }],
+    });
+    loadNotes(db, startRun(db, null), bundle(solaAna));
+    expect(db.prepare("SELECT COUNT(*) c FROM note_interactions WHERE kind = 'like'").get()).toEqual({ c: 1 });
+    expect(db.prepare("SELECT reaction_count FROM notes WHERE note_id = 100").get()).toEqual({ reaction_count: 1 });
   });
 });
 

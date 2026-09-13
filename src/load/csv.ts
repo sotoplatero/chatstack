@@ -13,6 +13,15 @@ export type CsvKind =
   | "free_subscriber_growth"
   | "paid_subscriber_growth"
   | "subscriber_totals"
+  | "followers"
+  | "unsubscribes"
+  | "unsubscribes_daily"
+  | "visitor_sources"
+  | "network_attribution"
+  | "audience_location"
+  | "audience_overlap"
+  | "referrers"
+  | "pub_summary"
   | "notes"
   | "unknown";
 
@@ -25,6 +34,15 @@ const SIGNATURES: Record<Exclude<CsvKind, "unknown" | "email_list" | "notes">, s
   free_subscriber_growth: ["date", "new_free"],
   paid_subscriber_growth: ["date", "new_paid"],
   subscriber_totals: ["date", "total_subscribers"],
+  followers: ["date", "followers"],
+  unsubscribes: ["email", "unsubscribed_at"],
+  unsubscribes_daily: ["date", "unsubscribes"],
+  visitor_sources: ["source", "views", "users"],
+  network_attribution: ["label", "subscribers"],
+  audience_location: ["location", "metric", "value"],
+  audience_overlap: ["subdomain", "percent_overlap"],
+  referrers: ["user_id", "visitors"],
+  pub_summary: ["metric", "value"],
 };
 
 /** Dos formatos de lista de suscriptores: el export legado (snake_case) y el actual de Audiencia → Exportar. */

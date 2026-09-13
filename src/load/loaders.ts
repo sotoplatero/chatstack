@@ -60,6 +60,19 @@ export function loadEmailList(db: Db, runId: number, rows: Row[]): LoadResult {
     const stale = db
       .prepare("SELECT email FROM subscribers WHERE is_active = 1 AND last_synced_run_id <> ?")
       .all(runId) as { email: string }[];
+    const desaparecidos = stale.filter((s) => !seen.has(s.email)).length;
+    /**
+     * Un export truncado a mitad —una descarga cortada, una página que falló— se parece mucho a
+     * una fuga masiva de suscriptores, y el daño no se deshace: quedan marcados como baja con la
+     * fecha de hoy. Ante una caída así de grande se prefiere no tocar nada y avisar: el sync
+     * siguiente, con el archivo completo, lo arregla solo.
+     */
+    const previos = desaparecidos + seen.size;
+    if (previos >= 20 && desaparecidos > previos * 0.3) {
+      throw new Error(
+        `el export solo trae ${seen.size} de ${previos} suscriptores activos: parece incompleto, no se marca ninguna baja`,
+      );
+    }
     const gone = db.prepare(
       "UPDATE subscribers SET is_active = 0, unsubscribed_at = ?, last_synced_run_id = ? WHERE email = ?",
     );
@@ -76,14 +89,15 @@ export function loadEmailList(db: Db, runId: number, rows: Row[]): LoadResult {
   });
 }
 
-export function loadPosts(db: Db, _runId: number, rows: Row[]): LoadResult {
+export function loadPosts(db: Db, runId: number, rows: Row[]): LoadResult {
   const res: LoadResult = { inserted: 0, updated: 0, skipped: 0 };
-  const stmt = db.prepare(`INSERT INTO posts (post_id, title, subtitle, post_date, is_published, email_sent_at, type, audience, slug, extra)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  const stmt = db.prepare(`INSERT INTO posts (post_id, title, subtitle, post_date, is_published, email_sent_at, type, audience, slug, wordcount, last_synced_run_id, extra)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET title=excluded.title, subtitle=excluded.subtitle, post_date=excluded.post_date,
       is_published=excluded.is_published, email_sent_at=excluded.email_sent_at, type=excluded.type, audience=excluded.audience,
-      slug=excluded.slug, extra=excluded.extra`);
-  const used = ["post_id", "title", "subtitle", "post_date", "is_published", "email_sent_at", "type", "audience"];
+      slug=excluded.slug, wordcount=excluded.wordcount, last_synced_run_id=excluded.last_synced_run_id, extra=excluded.extra`);
+  const used = ["post_id", "title", "subtitle", "post_date", "is_published", "email_sent_at", "type", "audience", "wordcount"];
+  const exists = db.prepare("SELECT 1 FROM posts WHERE post_id = ?");
   return tx(db, () => {
     for (const row of rows) {
       const id = (row.post_id ?? "").trim();
@@ -92,6 +106,7 @@ export function loadPosts(db: Db, _runId: number, rows: Row[]): LoadResult {
         continue;
       }
       const slug = id.includes(".") ? id.slice(id.indexOf(".") + 1) : null;
+      const had = !!exists.get(id);
       stmt.run(
         id,
         row.title ?? null,
@@ -102,16 +117,29 @@ export function loadPosts(db: Db, _runId: number, rows: Row[]): LoadResult {
         row.type ?? null,
         row.audience ?? null,
         slug,
+        toInt(row.wordcount),
+        runId,
         rest(row, used),
       );
-      res.inserted++;
+      had ? res.updated++ : res.inserted++;
     }
     return res;
   });
 }
 
-/** Une email_stats con posts por post_date exacto y, si no, por título. Sin match → post_id sintético "title:<título>". */
-export function resolvePostId(db: Db, title: string, postDate: string | null): string {
+/**
+ * Une email_stats con posts. Desde que el CSV trae `post_id` basta con casarlo con el id de la
+ * tabla, que es `<id>.<slug>`; el cruce por fecha y título se conserva para los CSV antiguos y
+ * para el export manual del panel, que no lleva id.
+ */
+export function resolvePostId(db: Db, title: string, postDate: string | null, rawId?: string): string {
+  const id = (rawId ?? "").trim();
+  if (id) {
+    const byId = db.prepare("SELECT post_id FROM posts WHERE post_id = ? OR post_id LIKE ?").get(id, `${id}.%`) as
+      | { post_id: string }
+      | undefined;
+    if (byId) return byId.post_id;
+  }
   if (postDate) {
     const byDate = db.prepare("SELECT post_id FROM posts WHERE post_date = ?").get(postDate) as
       | { post_id: string }
@@ -122,15 +150,20 @@ export function resolvePostId(db: Db, title: string, postDate: string | null): s
     .prepare("SELECT post_id FROM posts WHERE title = ? ORDER BY post_date DESC LIMIT 1")
     .get(title) as { post_id: string } | undefined;
   if (byTitle) return byTitle.post_id;
-  return "title:" + title;
+  return id ? id : "title:" + title;
 }
 
 export function loadEmailStats(db: Db, runId: number, rows: Row[]): LoadResult {
   const res: LoadResult = { inserted: 0, updated: 0, skipped: 0 };
   const stmt = db.prepare(`INSERT OR REPLACE INTO post_email_stats
-    (post_id, run_id, title, post_date, audience, views, engagement_rate, signups, subscribes, estimated_value, open_rate, extra)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  const used = ["title", "post_date", "audience", "views", "engagement_rate", "signups", "subscribes", "estimated_value", "open_rate"];
+    (post_id, run_id, title, post_date, audience, views, engagement_rate, signups, subscribes, estimated_value, open_rate,
+     sent, delivered, opens, opened, clicks, clicked, click_rate, likes, comments, shares, restacks, unsubscribes, finished_post, extra)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const used = [
+    "post_id", "title", "post_date", "audience", "views", "engagement_rate", "signups", "subscribes", "estimated_value",
+    "open_rate", "sent", "delivered", "opens", "opened", "clicks", "clicked", "click_through_rate", "likes", "comments",
+    "shares", "restacks", "unsubscribes", "subscribers_finished_post",
+  ];
   return tx(db, () => {
     for (const row of rows) {
       const title = (row.title ?? "").trim();
@@ -140,7 +173,7 @@ export function loadEmailStats(db: Db, runId: number, rows: Row[]): LoadResult {
       }
       const postDate = normDate(row.post_date);
       stmt.run(
-        resolvePostId(db, title, postDate),
+        resolvePostId(db, title, postDate, row.post_id),
         runId,
         title,
         postDate,
@@ -151,6 +184,19 @@ export function loadEmailStats(db: Db, runId: number, rows: Row[]): LoadResult {
         toInt(row.subscribes),
         toNum(row.estimated_value),
         toNum(row.open_rate),
+        toInt(row.sent),
+        toInt(row.delivered),
+        toInt(row.opens),
+        toInt(row.opened),
+        toInt(row.clicks),
+        toInt(row.clicked),
+        toNum(row.click_through_rate),
+        toInt(row.likes),
+        toInt(row.comments),
+        toInt(row.shares),
+        toInt(row.restacks),
+        toInt(row.unsubscribes),
+        toInt(row.subscribers_finished_post),
         rest(row, used),
       );
       res.inserted++;

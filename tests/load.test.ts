@@ -199,6 +199,44 @@ describe("loadDirectory", () => {
     expect(db.prepare("SELECT plan FROM subscriber_snapshots WHERE email = 'd@x.com' AND run_id = 2").get()).toEqual({ plan: "churned" });
   });
 
+  it("un export truncado no marca una fuga masiva de bajas", () => {
+    // 30 suscriptores activos y, al sync siguiente, un archivo cortado con solo dos.
+    const fila = (i: number) => `u${i}@x.com,Ana ${i},Free,2026-06-01,\n`;
+    const cabecera = "Email,Name,Type,Start date,Cancel date\n";
+    const completo = cabecera + Array.from({ length: 30 }, (_, i) => fila(i)).join("");
+    const truncado = cabecera + fila(0) + fila(1);
+    loadDirectory(db, fixtureDir({ "email_list.csv": completo }));
+    expect(db.prepare("SELECT COUNT(*) c FROM subscribers WHERE is_active = 1").get()).toEqual({ c: 30 });
+
+    const rep = loadDirectory(db, fixtureDir({ "email_list.csv": truncado }));
+    expect(rep.status).toBe("failed");
+    expect(rep.files.find((f) => f.kind === "email_list")!.error).toMatch(/incompleto/);
+    // Nadie se ha dado de baja: el archivo malo no deja rastro.
+    expect(db.prepare("SELECT COUNT(*) c FROM subscribers WHERE is_active = 1").get()).toEqual({ c: 30 });
+  });
+
+  it("deriva las altas free por día de la fecha de alta de cada suscriptor", () => {
+    loadDirectory(db, fixtureDir({ "email_list.csv": EMAIL_LIST_V1 }));
+    const filas = db
+      .prepare("SELECT date, new_free FROM subscriber_growth_daily WHERE new_free IS NOT NULL ORDER BY date")
+      .all() as { date: string; new_free: number }[];
+    // Substack no expone la serie de altas free; sale de los propios suscriptores.
+    expect(filas).toEqual([
+      { date: "2026-05-01", new_free: 1 },
+      { date: "2026-07-01", new_free: 1 },
+    ]);
+  });
+
+  it("casa email_stats con posts por post_id aunque cambie el título", () => {
+    const statsConId =
+      "post_id,title,post_date,audience,views,open_rate,sent,clicks,likes,unsubscribes\n" +
+      "111,Título nuevo,2026-07-18T04:27:59.900Z,everyone,35,0.3,100,4,9,1\n";
+    const rep = loadDirectory(db, fixtureDir({ "posts.csv": POSTS, "email_stats.csv": statsConId }));
+    expect(rep.status).toBe("ok");
+    const row = db.prepare("SELECT post_id, sent, clicks, likes, unsubscribes FROM post_email_stats").get();
+    expect(row).toEqual({ post_id: "111.first-post", sent: 100, clicks: 4, likes: 9, unsubscribes: 1 });
+  });
+
   it("registra archivos desconocidos sin abortar", () => {
     const rep = loadDirectory(db, fixtureDir({ "email_list.csv": EMAIL_LIST_V1, "raro.csv": "foo,bar\n1,2\n" }));
     expect(rep.status).toBe("ok");

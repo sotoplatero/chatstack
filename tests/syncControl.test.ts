@@ -8,7 +8,7 @@ import { collectNotes, fetchOwnNotes, type NoteCounts } from "../src/ingest/note
 import { SubstackClient } from "../src/ingest/substack.js";
 import { coverage, knownNotes, missingDatasets } from "../src/queries.js";
 import { loadNotes } from "../src/load/notes.js";
-import { startRun, finishRun } from "../src/db/index.js";
+import { startRun, finishRun, markRunPartial } from "../src/db/index.js";
 
 let home: string;
 beforeEach(() => {
@@ -46,6 +46,28 @@ describe("guardia de frescura", () => {
     const db = openDb(":memory:");
     startRun(db, null); // queda 'running', sin finished_at
     expect(isFresh(db, 24)).toBe(false);
+  });
+
+  it("un sync parcial no cuenta como fresco: dejó alguna fuente sin bajar", () => {
+    const db = openDb(":memory:");
+    const id = startRun(db, null);
+    db.prepare("UPDATE sync_runs SET finished_at = ?, status = 'partial' WHERE id = ?").run(new Date().toISOString(), id);
+    expect(isFresh(db, 24)).toBe(false);
+    // Y en cuanto uno sale bien, vuelve a contar.
+    const ok = startRun(db, null);
+    db.prepare("UPDATE sync_runs SET finished_at = ?, status = 'ok' WHERE id = ?").run(new Date().toISOString(), ok);
+    expect(isFresh(db, 24)).toBe(true);
+  });
+
+  it("markRunPartial degrada el run y conserva la nota anterior", () => {
+    const db = openDb(":memory:");
+    const id = startRun(db, null);
+    finishRun(db, id, "ok", "lo cargado");
+    markRunPartial(db, id, "traffic: HTTP 503");
+    const row = db.prepare("SELECT status, notes FROM sync_runs WHERE id = ?").get(id) as { status: string; notes: string };
+    expect(row.status).toBe("partial");
+    expect(row.notes).toContain("lo cargado");
+    expect(row.notes).toContain("traffic: HTTP 503");
   });
 });
 

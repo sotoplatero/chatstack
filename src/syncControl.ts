@@ -20,10 +20,14 @@ export interface Lock {
   started_at: string;
 }
 
-/** Horas desde el último sync terminado, o null si no hay ninguno. */
+/**
+ * Horas desde el último sync que salió bien, o null si no hay ninguno. Un run `partial` o
+ * `failed` no cuenta: si dejó fuera una fuente, dar los datos por frescos es justo lo que
+ * impediría reintentarla.
+ */
 export function hoursSinceLastSync(db: Db, now = Date.now()): number | null {
   const row = db
-    .prepare("SELECT finished_at FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1")
+    .prepare("SELECT finished_at FROM sync_runs WHERE finished_at IS NOT NULL AND status = 'ok' ORDER BY id DESC LIMIT 1")
     .get() as { finished_at: string } | undefined;
   if (!row?.finished_at) return null;
   const t = Date.parse(row.finished_at);

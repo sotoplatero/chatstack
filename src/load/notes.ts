@@ -24,7 +24,21 @@ export function loadNotes(db: Db, runId: number, bundle: NotesBundle): LoadResul
       is_subscribed=COALESCE(excluded.is_subscribed, note_actors.is_subscribed),
       is_following=COALESCE(excluded.is_following, note_actors.is_following),
       bestseller_tier=COALESCE(excluded.bestseller_tier, note_actors.bestseller_tier), last_seen_at=excluded.last_seen_at`);
-  const delInter = db.prepare("DELETE FROM note_interactions WHERE note_id = ?");
+  /**
+   * Solo se borra lo que se ha vuelto a descargar. Si la petición de likes falló, sus filas
+   * anteriores se quedan: mejor un dato de hace unas horas que ninguno.
+   */
+  const delKind = db.prepare("DELETE FROM note_interactions WHERE note_id = ? AND kind = ?");
+  /**
+   * Cuando algún paso falló, los contadores del feed no se guardan. Así la nota sigue viéndose
+   * "cambiada" en el siguiente sync y se vuelve a intentar, en lugar de quedar coja para siempre.
+   */
+  const upNotePartial = db.prepare(`INSERT INTO notes
+      (note_id, user_id, date, body, reaction_count, restacks, replies_count, attachments, stats, stats_updated_at, last_synced_run_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(note_id) DO UPDATE SET date=excluded.date, body=excluded.body, attachments=excluded.attachments,
+      stats=COALESCE(excluded.stats, notes.stats), stats_updated_at=COALESCE(excluded.stats_updated_at, notes.stats_updated_at),
+      last_synced_run_id=excluded.last_synced_run_id`);
   const insInter = db.prepare(`INSERT OR REPLACE INTO note_interactions
       (note_id, actor_user_id, kind, reply_id, created_at, body, reaction_count, run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
   const exists = db.prepare("SELECT 1 FROM notes WHERE note_id = ?");
@@ -43,21 +57,32 @@ export function loadNotes(db: Db, runId: number, bundle: NotesBundle): LoadResul
         continue;
       }
       const had = !!exists.get(n.id);
-      upNote.run(n.id, n.user_id, n.date, n.body, n.reaction_count, n.restacks, n.children_count, JSON.stringify(n.attachments ?? []),
+      const failed = new Set(n.failed ?? []);
+      const stmt = failed.size ? upNotePartial : upNote;
+      stmt.run(n.id, n.user_id, n.date, n.body, n.reaction_count, n.restacks, n.children_count, JSON.stringify(n.attachments ?? []),
         n.stats ? JSON.stringify(n.stats) : null, n.stats ? bundle.fetched_at : null, runId);
-      // Las interacciones de la nota se reconstruyen enteras: quien quitó el like desaparece.
-      delInter.run(n.id);
-      for (const a of n.reactors.filter(valid)) {
-        actor(a);
-        insInter.run(n.id, a.id, "like", 0, null, null, null, runId);
+      // Cada tipo se reconstruye entero, para que quien quitó el like desaparezca; pero solo si
+      // se pudo descargar. Lo que falló se deja intacto.
+      if (!failed.has("reactors")) {
+        delKind.run(n.id, "like");
+        for (const a of n.reactors.filter(valid)) {
+          actor(a);
+          insInter.run(n.id, a.id, "like", 0, null, null, null, runId);
+        }
       }
-      for (const a of n.restackers.filter(valid)) {
-        actor(a);
-        insInter.run(n.id, a.id, "restack", 0, null, null, null, runId);
+      if (!failed.has("restackers")) {
+        delKind.run(n.id, "restack");
+        for (const a of n.restackers.filter(valid)) {
+          actor(a);
+          insInter.run(n.id, a.id, "restack", 0, null, null, null, runId);
+        }
       }
-      for (const r of n.replies.filter((r) => valid(r.actor))) {
-        actor(r.actor);
-        insInter.run(n.id, r.actor.id, "reply", r.id, r.date, r.body, r.reaction_count, runId);
+      if (!failed.has("replies")) {
+        delKind.run(n.id, "reply");
+        for (const r of n.replies.filter((r) => valid(r.actor))) {
+          actor(r.actor);
+          insInter.run(n.id, r.actor.id, "reply", r.id, r.date, r.body, r.reaction_count, runId);
+        }
       }
       had ? res.updated++ : res.inserted++;
     }

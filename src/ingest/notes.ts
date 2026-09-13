@@ -44,6 +44,13 @@ export interface NoteRecord {
   restackers: NoteActor[];
   replies: NoteReply[];
   stats: unknown | null;
+  /**
+   * Pasos que fallaron al recoger esta nota ("reactors", "restackers", "replies"). Si hay alguno,
+   * la lista correspondiente llega vacía por un error, no porque no haya nadie: el cargador no
+   * debe tomarla como la verdad ni pisar los contadores, o la nota quedaría "sin cambios" y el
+   * incremental no volvería a pedirla nunca.
+   */
+  failed?: string[];
 }
 
 export interface NotesBundle {
@@ -239,6 +246,7 @@ export async function collectNotes(client: SubstackClient, opts: CollectNotesOpt
           await fn();
         } catch (e) {
           bundle.errors.push({ note_id: id, step: name, error: e instanceof Error ? e.message : String(e) });
+          (rec.failed ??= []).push(name);
         }
       };
       // Sin likes/restacks/respuestas no hay nada que pedir: ahorra 3 peticiones por nota vacía.

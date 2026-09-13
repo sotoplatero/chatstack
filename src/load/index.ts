@@ -16,6 +16,7 @@ import {
   loadTraffic,
   type LoadResult,
 } from "./loaders.js";
+import { deriveFreeGrowth, isStatsKind, loadStatsTable, loadUnsubscribesDaily } from "./statsLoaders.js";
 import { loadNotes } from "./notes.js";
 import type { NotesBundle } from "../ingest/notes.js";
 
@@ -108,6 +109,15 @@ const ORDER: CsvKind[] = [
   "free_subscriber_growth",
   "paid_subscriber_growth",
   "subscriber_totals",
+  "followers",
+  "unsubscribes",
+  "unsubscribes_daily",
+  "visitor_sources",
+  "network_attribution",
+  "audience_location",
+  "audience_overlap",
+  "referrers",
+  "pub_summary",
   "unknown",
 ];
 
@@ -163,7 +173,14 @@ function loadCsvPaths(db: Db, runId: number, paths: string[], insRaw: ReturnType
           case "subscriber_totals":
             rep.result = loadSubscriberTotals(db, runId, f.rows);
             break;
+          case "unsubscribes_daily":
+            rep.result = loadUnsubscribesDaily(db, runId, f.rows);
+            break;
           default:
+            if (isStatsKind(f.kind)) {
+              rep.result = loadStatsTable(db, runId, f.kind, f.rows);
+              break;
+            }
             rep.error = "cabeceras no reconocidas; archivo registrado pero no cargado";
         }
       } catch (e) {
@@ -181,6 +198,9 @@ export function loadDirectory(db: Db, dir: string): RunReport {
   const files: FileReport[] = loadCsvPaths(db, runId, collectCsvPaths(dir), insRaw);
 
   loadJsonBundles(db, runId, dir, files, insRaw);
+
+  // Las altas free por día se derivan de los suscriptores ya cargados; no vienen de ningún CSV.
+  if (files.some((f) => f.kind === "email_list" && f.result)) deriveFreeGrowth(db, runId);
 
   const loaded = files.filter((f) => f.result).length;
   const failed = files.filter((f) => f.error && f.kind !== "unknown").length;
