@@ -57,11 +57,12 @@ Los datos y la sesión viven en `~/.stackchat` **de la máquina donde corre el b
 dice en qué home estás. Si no es el del usuario —un sandbox alojado, una sesión remota— entonces su
 cookie no está ahí y la base que llenes se pierde al cerrar.
 
-**Eso no te impide responder, así que no te pares.** La vía del navegador trae todo sin tocar el
-disco del usuario: publicación, posts, crecimiento, tráfico, Notes y suscriptores vuelven por el
-resultado del tool, y el detalle de aperturas y clics se baja con `curl` desde una URL firmada que
-queda en el registro de red (está en `navegador.md`). Lo que pierdes es la persistencia: la base
-que llenes ahí se borra al cerrar y no habrá `sync` automático.
+**Eso no te impide responder, pero condiciona la vía del navegador.** El resultado de
+`javascript_tool` se trunca a ~1 KB, así que el JSON de publicación y Notes solo sale de la página
+por **una descarga de Chrome** que tú recoges de `~/Downloads`. Si tu shell no ve esa carpeta, la
+vía del navegador no puede terminar y hay que pedir el cURL. El CSV de detalle sí se baja con
+`curl` desde una URL firmada, sin tocar Descargas. Y en un sandbox pierdes además la persistencia:
+la base se borra al cerrar y no habrá `sync` automático. Todo está en `navegador.md`.
 
 Así que ahí: trae los datos por el navegador, responde, y dile en una línea que conectando una vez
 con el cURL desde su máquina lo tiene permanente y automático. Sin dramatizar y sin convertirlo en
@@ -156,10 +157,10 @@ delante en *cada* sincronización futura, para siempre, porque no deja sesión g
 puede funcionar sin ella. El cURL es una molestia que se paga una vez; el navegador es una molestia
 que se paga siempre.
 
-**No hace falta que Chrome y tu shell sean la misma máquina.** Nada pasa por la carpeta de
-Descargas del usuario: los datos vuelven por el resultado del tool y el CSV de engagement se baja
-con `curl` desde una URL firmada. Lo que sí necesitas es poder ejecutar el binario en algún sitio
-con red.
+**Necesitas ver la carpeta de Descargas del usuario.** El resultado de `javascript_tool` se
+trunca a ~1 KB, así que el JSON de la página solo sale por una descarga única de Chrome que tú
+recoges de `~/Downloads`. Si tu shell no la ve, no empieces: pide el cURL. Solo el CSV de
+engagement se baja aparte con `curl` desde una URL firmada.
 
 ## Refrescar
 

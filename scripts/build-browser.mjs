@@ -21,6 +21,7 @@
  * nadie consulta) y el bundle pasaría de 100 KB a 2 MB.
  */
 import { writeFileSync, mkdirSync } from "node:fs";
+import { Script } from "node:vm";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -49,6 +50,8 @@ const _post = async (u, body) => {
   return r.ok ? r.json() : { __err: r.status, __url: u };
 };
 const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Celda CSV: la comparten posts y suscriptores, por eso vive en el nivel superior.
+const cell = (v) => /[",\\n\\r]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v == null ? '' : v);
 // Substack ha devuelto el id del export como export_id, id y exportId segun la version.
 const _exportId = (o) => o && (o.export_id || o.id || o.exportId);
 const P = (window.__stackchat = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
@@ -110,7 +113,6 @@ P.paso = 'publication';
   // posts: /archive paginado, con el mismo formato que el export oficial posts.csv.
   P.fase = 'posts';
   {
-    const cell = (v) => /[",\\n\\r]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v == null ? '' : v);
     const head = ['post_id','post_date','is_published','email_sent_at','inbox_sent_at','type','audience','title','subtitle','podcast_url','canonical_url','wordcount'];
     const rows = [];
     for (let offset = 0; offset < 5000; offset += 50) {
@@ -146,9 +148,7 @@ P.paso = 'publication';
         s.user_email_address, s.user_name, s.subscription_type || '', s.subscription_interval || '',
         s.subscription_created_at, s.activity_rating, s.total_revenue_generated,
       ]);
-      files['email_list.csv'] = [head, ...cuerpo].map((r) => r.map(cell).join(',')).join('
-') + '
-';
+      files['email_list.csv'] = [head, ...cuerpo].map((r) => r.map(cell).join(',')).join('\\n') + '\\n';
     } else {
       P.avisos.push({ file: 'email_list.csv', motivo: 'subscriber-stats no devolvio suscriptores' });
     }
@@ -176,6 +176,12 @@ P.paso = 'publication';
   }
 
   P.datos = { kind: 'stackchat-files', fetched_at: new Date().toISOString(), origin: location.origin, files, email_list_url };
+  // Version en texto para sacarla por trozos: P.json.slice(0, 120000), .slice(120000, 240000)...
+  // Concatenados reproducen el JSON exacto, y ningun resultado de tool se pasa de tamano.
+  P.json = JSON.stringify(P.datos); P.jsonLength = P.json.length;
+  // El resultado del tool se trunca a ~1 KB, asi que el JSON no cabe por ahi. Sale por UNA descarga
+  // (una sola no la bloquea Chrome) que el agente recoge de la carpeta de Descargas del usuario.
+  P.descargar = (nombre) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([P.json], { type: 'application/json' })); a.download = nombre || 'stackchat-publication.json'; document.body.appendChild(a); a.click(); a.remove(); return 'descarga lanzada: ' + a.download; };
   P.resumen = {
     incluye: Object.keys(files).map((k) => k + ' (' + files[k].trim().split('\\n').length + ' filas)'),
     email_list_url,
@@ -302,6 +308,8 @@ P.paso = 'notes';
   bundle.notes.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
   P.datos = bundle;
+  P.json = JSON.stringify(bundle); P.jsonLength = P.json.length;
+  P.descargar = (nombre) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([P.json], { type: 'application/json' })); a.download = nombre || 'stackchat-notes.json'; document.body.appendChild(a); a.click(); a.remove(); return 'descarga lanzada: ' + a.download; };
   P.resumen = {
     notas: bundle.notes.length,
     likes: bundle.notes.reduce((n, x) => n + x.reactors.length, 0),
@@ -319,6 +327,13 @@ P.paso = 'notes';
 ({ arrancado: 'notes', siguiente: 'sondea window.__stackchat hasta listo:true, luego lee window.__stackchat.datos' })
 `;
 
+/** Un salto de linea mal escapado dentro de un template literal deja un snippet que no compila. */
+const compila = (nombre, src) => {
+  try { new Script("(async () => {" + src + "\n})"); }
+  catch (e) { throw new Error(nombre + " no compila: " + e.message); }
+};
+compila("01-publication.js", publication);
+compila("02-notes.js", notes);
 writeFileSync(join(OUT, "01-publication.js"), publication.trimStart(), "utf8");
 writeFileSync(join(OUT, "02-notes.js"), notes.trimStart(), "utf8");
 console.log(`snippets escritos en ${OUT}`);

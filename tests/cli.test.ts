@@ -122,8 +122,12 @@ describe("bundle del skill", () => {
       expect(snippet).toContain("window.__stackchat");
       expect(snippet).toContain("P.listo = true");
       expect(snippet).toMatch(/arrancado/);
-      // Nada de descargas: Chrome bloquea las automáticas repetidas de un sitio.
-      expect(snippet).not.toContain("a.download");
+      // Una sola descarga, y solo si el agente la pide: Chrome bloquea las automáticas repetidas
+      // de un sitio, y el resultado de `javascript_tool` se trunca a ~1 KB, así que el bundle no
+      // puede salir por ahí. `descargar()` existe, pero el snippet nunca la invoca por su cuenta.
+      expect(snippet.match(/a\.click\(\)/g)?.length).toBe(1);
+      expect(snippet).toContain("P.descargar = ");
+      expect(snippet).not.toMatch(/(?<!P\.)descargar\(\)|P\.descargar\(/);
       // Todo error queda dentro del objeto de progreso, no revienta la página.
       expect(snippet).toContain("P.error =");
     }

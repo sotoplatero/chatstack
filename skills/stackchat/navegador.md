@@ -1,8 +1,8 @@
 # La vía del navegador (plan B)
 
-**Cuándo:** solo si el usuario ha rechazado dar el cURL y existen herramientas
-`mcp__claude-in-chrome__*`. Funciona aunque tu shell no vea el disco del usuario: nada pasa por su
-carpeta de Descargas.
+**Cuándo:** solo si el usuario ha rechazado dar el cURL, existen herramientas
+`mcp__claude-in-chrome__*`, y tu shell ve la carpeta de Descargas del usuario (el JSON solo sale de
+la página por una descarga). El CSV de detalle, en cambio, se baja con `curl` sin tocar Descargas.
 
 No deja sesión guardada, así que `sync` seguirá sin funcionar y habrá que repetir esto entero cada
 vez que quiera datos frescos. Adviérteselo antes de empezar, en una línea, y sigue.
@@ -18,12 +18,27 @@ publicación, y léelo de la URL. Pregunta solo si las dos cosas fallan.
   Devuelve enseguida `{arrancado}`: la página sigue trabajando sola.
 - **No te quedes esperando.** Dile que tarda alrededor de un minuto y sigue atendiéndole.
   Comprueba `window.__stackchat` cuando vuelvas a intervenir; si `listo` es `true`, recógelo.
-- Lee `window.__stackchat.datos`, guárdalo con Write en
-  `<carpeta temporal>/stackchat-publication.json` y ejecuta `$CS load <carpeta temporal>`.
+- Sácalo con `window.__stackchat.descargar()` (método de abajo) y ejecuta `$CS load <carpeta>`.
 
-Los datos vuelven por el resultado del tool. **No los descargues ni los hagas pasar por el
-usuario**: el snippet no descarga nada a propósito, precisamente para que no haya archivos que
-mover a mano.
+### Cómo sacar los datos de la página (vale para publicación y para Notes)
+
+**El resultado de `javascript_tool` se trunca a ~1 KB.** Está medido: no sirve para sacar el JSON
+(publicación ronda 75 KB; Notes pasa de 400 KB). No lo intentes por trozos ni leyendo
+`window.__stackchat.datos`: verás `[TRUNCATED]` y perderás el rato.
+
+La única salida que funciona hoy es **una descarga única de Chrome**, que tú recoges:
+
+1. Comprueba primero que tu shell **ve la carpeta de Descargas del usuario** (`~/Downloads` o el
+   equivalente). Si no la ve —Cowork sin esa carpeta adjunta, sesión remota— la vía del navegador
+   no puede terminar: dilo en una línea y pide el cURL. No sigas.
+2. Cuando `window.__stackchat.listo` sea `true`, ejecuta `window.__stackchat.descargar()`.
+   Lanza **una sola** descarga (`stackchat-publication.json` o `stackchat-notes.json`); una sola no
+   la bloquea Chrome. Si Chrome pide permiso, dile al usuario en una línea que lo acepte.
+3. Recoge el archivo de Descargas (el más reciente con ese nombre), muévelo a una carpeta donde
+   puedas escribir y ejecuta `$CS load <esa carpeta>`.
+
+**Nunca** le pidas al usuario que guarde, mueva o suba el archivo. Si la descarga no aparece en
+unos segundos, díselo con claridad y pásate al cURL.
 
 **2. Suscriptores** — los básicos vienen dentro del paso 1; el detalle, por el registro de red
 
@@ -58,7 +73,7 @@ el detalle de aperturas quedó fuera. **Nunca le pidas al usuario que descargue 
 - `javascript_tool` con **`<SKILL_DIR>/browser/02-notes.js`**.
 - Con 200+ notas tarda varios minutos. **Tampoco esperes**: avisa, sigue respondiendo, y recógelo
   cuando vuelvas a intervenir. `progreso` marca `hechas/total` si quieres informar del avance.
-- Lee `window.__stackchat.datos`, guárdalo como `stackchat-notes.json` y `$CS load <carpeta>`.
+- Sácalo con `window.__stackchat.descargar()` (método de arriba) y `$CS load <carpeta>`.
 
 **Este paso no es opcional y no se pregunta.** Que tarde no es motivo para saltárselo ni para
 convertirlo en «¿quieres que también traiga las notas?». Lánzalo, dilo, y sigue atendiendo con lo

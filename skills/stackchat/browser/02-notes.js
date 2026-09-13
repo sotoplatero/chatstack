@@ -13,6 +13,8 @@ const _post = async (u, body) => {
   return r.ok ? r.json() : { __err: r.status, __url: u };
 };
 const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Celda CSV: la comparten posts y suscriptores, por eso vive en el nivel superior.
+const cell = (v) => /[",\n\r]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v == null ? '' : v);
 // Substack ha devuelto el id del export como export_id, id y exportId segun la version.
 const _exportId = (o) => o && (o.export_id || o.id || o.exportId);
 const P = (window.__stackchat = { paso: '', fase: 'arrancando', progreso: '', listo: false, error: null, avisos: [], datos: null });
@@ -127,6 +129,8 @@ P.paso = 'notes';
   bundle.notes.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
   P.datos = bundle;
+  P.json = JSON.stringify(bundle); P.jsonLength = P.json.length;
+  P.descargar = (nombre) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([P.json], { type: 'application/json' })); a.download = nombre || 'stackchat-notes.json'; document.body.appendChild(a); a.click(); a.remove(); return 'descarga lanzada: ' + a.download; };
   P.resumen = {
     notas: bundle.notes.length,
     likes: bundle.notes.reduce((n, x) => n + x.reactors.length, 0),
