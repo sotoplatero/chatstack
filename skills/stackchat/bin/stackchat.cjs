@@ -2776,7 +2776,7 @@ function dateRange(col3, from, to) {
   return { sql: parts.length ? parts.join(" AND ") : "1=1", args };
 }
 function getOverview(db) {
-  const lastRun = db.prepare("SELECT id, started_at, finished_at, status FROM sync_runs WHERE status <> 'running' ORDER BY id DESC LIMIT 1").get();
+  const lastRun2 = db.prepare("SELECT id, started_at, finished_at, status FROM sync_runs WHERE status <> 'running' ORDER BY id DESC LIMIT 1").get();
   const totals = db.prepare(
     `SELECT
         COUNT(*) AS total,
@@ -2806,7 +2806,7 @@ function getOverview(db) {
   const totalsSeries = db.prepare("SELECT date, total_subscribers FROM subscriber_totals ORDER BY date DESC LIMIT 1").get() ?? null;
   return {
     latest_total_from_series: totalsSeries,
-    last_sync: lastRun ?? null,
+    last_sync: lastRun2 ?? null,
     subscribers: totals,
     active_by_plan: byPlan,
     // Tres formas distintas de contar «altas», con el origen en el nombre para que nadie las sume.
@@ -3895,6 +3895,10 @@ function openDb(path) {
   return db;
 }
 var ADDED_COLUMNS = {
+  // Por qué falló un intento, como código estable y no como frase. El motivo vivía solo en un
+  // archivo de texto, así que para saber si la sesión había caducado había que buscar una palabra
+  // dentro de una oración: cambiarle la redacción rompía la detección sin que nada avisara.
+  sync_runs: ["failure TEXT"],
   posts: ["wordcount INTEGER", "last_synced_run_id INTEGER"],
   post_email_stats: [
     "sent INTEGER",
@@ -3939,11 +3943,24 @@ function finishRun(db, runId, status, notes) {
 function tableColumns(db, table) {
   return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
 }
+function recordFailedRun(db, failure, notes) {
+  const id = startRun(db, null);
+  db.prepare("UPDATE sync_runs SET finished_at = ?, status = 'failed', failure = ?, notes = ? WHERE id = ?").run(
+    nowIso(),
+    failure,
+    notes,
+    id
+  );
+  return id;
+}
+function lastRun(db) {
+  return db.prepare("SELECT id, finished_at, status, failure FROM sync_runs WHERE status <> 'running' ORDER BY id DESC LIMIT 1").get() ?? null;
+}
 function markRunPartial(db, runId, extra) {
   const row = db.prepare("SELECT notes FROM sync_runs WHERE id = ?").get(runId);
   const notes = [row?.notes, `fuentes que no se pudieron descargar:
 ${extra}`].filter(Boolean).join("\n");
-  db.prepare("UPDATE sync_runs SET status = 'partial', notes = ? WHERE id = ?").run(notes, runId);
+  db.prepare("UPDATE sync_runs SET status = 'partial', failure = 'partial_sources', notes = ? WHERE id = ?").run(notes, runId);
 }
 
 // src/load/index.ts
@@ -7865,23 +7882,32 @@ ${helpText()}` : 'Falta la consulta: stackchat sql "SELECT ..."');
         return;
       }
       const fresca = isFresh(db, Number.isFinite(horas) && horas >= 0 ? horas : 6);
-      const hayQueBajar = vacia || falta.length > 0 || !fresca;
+      const edad = hoursSinceLastSync(db);
+      const log2 = readLastSyncLog();
+      const ultimo = lastRun(db);
+      const caducada = ultimo?.failure === "session_expired";
+      const hayQueBajar = !caducada && (vacia || falta.length > 0 || !fresca);
       let lanzado = null;
       if (hayQueBajar) {
         const args = [process.argv[1], "sync", ...values.sub ? ["--sub", values.sub] : [], ...values.db ? ["--db", values.db] : []];
         const pid = relaunchDetached(args);
         lanzado = pid ? `sync en segundo plano (pid ${pid})` : "no se pudo lanzar en segundo plano; ejecuta `stackchat sync` a mano";
       }
+      const estado = caducada ? vacia ? "sin_sesion" : "sesion_caducada" : vacia ? hayQueBajar ? "descargando_por_primera_vez" : "sin_datos" : hayQueBajar ? "listo_actualizando" : "listo";
+      const frescura = edad === null ? "sin_datos" : edad < 6 ? "fresco" : edad < 48 ? "viejo" : "muy_viejo";
       process.stdout.write(
         JSON.stringify(
           {
-            estado: vacia ? hayQueBajar ? "descargando_por_primera_vez" : "sin_datos" : hayQueBajar ? "listo_actualizando" : "listo",
+            estado,
             subdomain: sub,
             publication_name: loadConfig()?.publication_name ?? null,
-            ultimo_sync: readLastSyncLog(),
+            datos_de_hace_horas: edad === null ? null : Math.round(edad * 10) / 10,
+            frescura,
+            ultimo_intento: ultimo && { id: ultimo.id, cuando: ultimo.finished_at, resultado: ultimo.status, fallo: ultimo.failure },
+            ultimo_sync: log2,
             faltan: falta,
             actualizacion: lanzado,
-            siguiente: vacia ? "El primer sync tarda 3-4 minutos por las notas. Dilo en una l\xEDnea y sigue atendiendo; no lo esperes." : "Responde ya con `stackchat q <consulta>`. Si lanz\xF3 un sync, dilo en una l\xEDnea y no lo esperes.",
+            siguiente: caducada ? "La sesi\xF3n ha caducado y no se arregla reintentando: p\xEDdele un cURL nuevo (los pasos est\xE1n en el skill) y no relances syncs. " + (vacia ? "No hay datos con los que responder mientras tanto." : "Mientras tanto responde con lo que hay, diciendo de cu\xE1ndo son las cifras.") : vacia ? "El primer sync tarda 3-4 minutos por las notas. Dilo en una l\xEDnea y sigue atendiendo; no lo esperes." : frescura === "fresco" ? "Responde ya con `stackchat q <consulta>`." : "Responde ya con `stackchat q <consulta>`, y **di de cu\xE1ndo son las cifras**: no est\xE1n frescas. " + (lanzado ? "Se est\xE1 actualizando en segundo plano; dilo en una l\xEDnea y no lo esperes." : ""),
             resumen: vacia ? null : getOverview(db)
           },
           null,
@@ -7952,12 +7978,14 @@ async function runSync(o) {
   });
   if (ingest.sessionExpired) {
     o.log("La sesi\xF3n de Substack ha caducado. Repite `stackchat connect` con un cURL nuevo.");
+    recordFailedRun(o.db, "session_expired", "la sesi\xF3n de Substack ha caducado");
     writeSyncLog("fall\xF3: la sesi\xF3n de Substack ha caducado");
     return 2;
   }
   if (ingest.failed.length) o.log(`Fallaron: ${ingest.failed.map((f) => `${f.kind} (${f.error})`).join("; ")}`);
   if (!ingest.downloaded.length) {
     o.log("No se descarg\xF3 nada; no hay nada que cargar.");
+    recordFailedRun(o.db, "nothing_downloaded", ingest.failed.map((f) => `${f.kind}: ${f.error}`).join("\n"));
     writeSyncLog("fall\xF3: no se descarg\xF3 nada");
     return 2;
   }

@@ -20,6 +20,10 @@ export function openDb(path: string): Db {
  * lo que hace falta: SQLite la rellena con NULL y los cargadores la escriben en el siguiente sync.
  */
 const ADDED_COLUMNS: Record<string, string[]> = {
+  // Por qué falló un intento, como código estable y no como frase. El motivo vivía solo en un
+  // archivo de texto, así que para saber si la sesión había caducado había que buscar una palabra
+  // dentro de una oración: cambiarle la redacción rompía la detección sin que nada avisara.
+  sync_runs: ["failure TEXT"],
   posts: ["wordcount INTEGER", "last_synced_run_id INTEGER"],
   post_email_stats: [
     "sent INTEGER", "delivered INTEGER", "opens INTEGER", "opened INTEGER", "clicks INTEGER",
@@ -62,9 +66,36 @@ export function tableColumns(db: Db, table: string): string[] {
   return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 }
 
+/**
+ * Motivos de fallo de un sync, como códigos cerrados. `session_expired` es el único que no se
+ * arregla reintentando: hace falta un cURL nuevo.
+ */
+export type SyncFailure = "session_expired" | "nothing_downloaded" | "partial_sources";
+
+/** Deja constancia en la base de un intento que ni siquiera llegó a cargar nada. */
+export function recordFailedRun(db: Db, failure: SyncFailure, notes: string): number {
+  const id = startRun(db, null);
+  db.prepare("UPDATE sync_runs SET finished_at = ?, status = 'failed', failure = ?, notes = ? WHERE id = ?").run(
+    nowIso(),
+    failure,
+    notes,
+    id,
+  );
+  return id;
+}
+
+/** El último intento, sea cual sea su resultado. De aquí sale el estado, no de un archivo suelto. */
+export function lastRun(db: Db): { id: number; finished_at: string | null; status: string; failure: string | null } | null {
+  return (
+    (db
+      .prepare("SELECT id, finished_at, status, failure FROM sync_runs WHERE status <> 'running' ORDER BY id DESC LIMIT 1")
+      .get() as { id: number; finished_at: string | null; status: string; failure: string | null } | undefined) ?? null
+  );
+}
+
 /** Degrada un run ya cerrado a `partial`, conservando lo que ya se anotó. */
 export function markRunPartial(db: Db, runId: number, extra: string) {
   const row = db.prepare("SELECT notes FROM sync_runs WHERE id = ?").get(runId) as { notes: string | null } | undefined;
   const notes = [row?.notes, `fuentes que no se pudieron descargar:\n${extra}`].filter(Boolean).join("\n");
-  db.prepare("UPDATE sync_runs SET status = 'partial', notes = ? WHERE id = ?").run(notes, runId);
+  db.prepare("UPDATE sync_runs SET status = 'partial', failure = 'partial_sources', notes = ? WHERE id = ?").run(notes, runId);
 }

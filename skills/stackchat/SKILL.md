@@ -75,12 +75,21 @@ estado, vuelve a llamarlo.
 | `listo` | Datos frescos. Responde con `$CS q`. |
 | `listo_actualizando` | Hay datos y ya se está bajando lo que faltaba. **Responde igual**, con lo que hay, y dilo en una línea. |
 | `descargando_por_primera_vez` | Base vacía y sesión válida. El primer sync tarda 3-4 minutos por las notas: dilo y sigue atendiendo. |
+| `sesion_caducada` | Hay datos, pero ya no se pueden actualizar. Responde **fechando las cifras** y pide un cURL nuevo. No relances syncs: no es un problema que se arregle reintentando. |
 | `sin_sesion` | No hay con qué descargar. `siguiente` trae los pasos del cURL; si además dice `hay_datos: true`, responde mientras tanto con lo que haya. |
+
+**Los datos viejos se fechan, no se disimulan.** El estado trae `datos_de_hace_horas` y `frescura`
+(`fresco` bajo 6 h, `viejo` bajo 48 h, `muy_viejo` por encima). Si no es `fresco`, di de cuándo son
+las cifras en la misma frase en que las das: «según el último sync, de hace tres días». Dar un
+número viejo como si fuera de ahora es el peor fallo posible aquí, porque nadie lo nota.
 
 **Nunca esperes al sync, nunca sondees, nunca digas «dame un momento».** Se desasocia y sigue por su
 cuenta; un candado impide que se solapen dos. Cuando el usuario vuelva a preguntar, ya estará.
 
 `$CS status` sigue existiendo para mirar el detalle: cobertura por conjunto, qué falta y cómo acabó
+el último intento. Se usa cuando algo va mal, no en cada sesión. El estado vive en la base, en
+`sync_runs`: cada intento deja su fila con su resultado y, si falló, con el motivo en un código
+(`session_expired`, `nothing_downloaded`, `partial_sources`).
 el último sync de fondo. Se usa cuando algo va mal, no en cada sesión.
 
 ## Conectar

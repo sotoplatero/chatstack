@@ -1,14 +1,14 @@
 import { parseArgs } from "node:util";
 import { resolve, join } from "node:path";
 import { readFileSync } from "node:fs";
-import { markRunPartial, openDb } from "./db/index.js";
+import { lastRun, markRunPartial, openDb, recordFailedRun } from "./db/index.js";
 import { loadDirectory, type RunReport } from "./load/index.js";
 import { ingestSubstack } from "./ingest/substack.js";
 import { cookieFromCurl, loadAuth } from "./ingest/auth.js";
 import { helpText, parseFlags, runQuery, UsageError } from "./queryCommand.js";
 import { coverage, getOverview, knownNotes, missingDatasets, querySql } from "./queries.js";
 import { connect } from "./connect.js";
-import { acquireLock, isFresh, readLastSyncLog, relaunchDetached, releaseLock, writeSyncLog } from "./syncControl.js";
+import { acquireLock, hoursSinceLastSync, isFresh, readLastSyncLog, relaunchDetached, releaseLock, writeSyncLog } from "./syncControl.js";
 import { authPath, stackchatHome, dbPath as resolveDbPath, loadConfig, rawDir, resolveSubdomain } from "./paths.js";
 
 const HELP = `stackchat — tus datos de Substack en una base local que puedes consultar
@@ -211,7 +211,19 @@ async function main() {
 
       // Con sesión: se actualiza solo lo que haga falta, siempre sin bloquear la respuesta.
       const fresca = isFresh(db, Number.isFinite(horas) && horas >= 0 ? horas : 6);
-      const hayQueBajar = vacia || falta.length > 0 || !fresca;
+      const edad = hoursSinceLastSync(db);
+      const log = readLastSyncLog();
+      /**
+       * El estado sale de la base, no del registro de texto: `sync_runs` guarda cada intento con un
+       * código de fallo estable. Antes había que buscar la palabra «caducada» dentro de una frase,
+       * así que reescribir el mensaje habría roto la detección sin que nada avisara.
+       *
+       * La sesión caducada es el único fallo que no se arregla reintentando, así que con ella no se
+       * relanza nada: sería una descarga condenada por cada invocación del skill.
+       */
+      const ultimo = lastRun(db);
+      const caducada = ultimo?.failure === "session_expired";
+      const hayQueBajar = !caducada && (vacia || falta.length > 0 || !fresca);
       let lanzado: string | null = null;
       if (hayQueBajar) {
         const args = [process.argv[1], "sync", ...(values.sub ? ["--sub", values.sub] : []), ...(values.db ? ["--db", values.db] : [])];
@@ -221,18 +233,46 @@ async function main() {
           : "no se pudo lanzar en segundo plano; ejecuta `stackchat sync` a mano";
       }
 
+      const estado = caducada
+        ? vacia
+          ? "sin_sesion"
+          : "sesion_caducada"
+        : vacia
+          ? hayQueBajar
+            ? "descargando_por_primera_vez"
+            : "sin_datos"
+          : hayQueBajar
+            ? "listo_actualizando"
+            : "listo";
+
+      // La edad de los datos, dicha en horas y en una palabra, para que no haya que calcularla ni
+      // deducirla de una marca de tiempo. Si son viejos hay que fecharlos al responder.
+      const frescura =
+        edad === null ? "sin_datos" : edad < 6 ? "fresco" : edad < 48 ? "viejo" : "muy_viejo";
+
       process.stdout.write(
         JSON.stringify(
           {
-            estado: vacia ? (hayQueBajar ? "descargando_por_primera_vez" : "sin_datos") : hayQueBajar ? "listo_actualizando" : "listo",
+            estado,
             subdomain: sub,
             publication_name: loadConfig()?.publication_name ?? null,
-            ultimo_sync: readLastSyncLog(),
+            datos_de_hace_horas: edad === null ? null : Math.round(edad * 10) / 10,
+            frescura,
+            ultimo_intento: ultimo && { id: ultimo.id, cuando: ultimo.finished_at, resultado: ultimo.status, fallo: ultimo.failure },
+            ultimo_sync: log,
             faltan: falta,
             actualizacion: lanzado,
-            siguiente: vacia
-              ? "El primer sync tarda 3-4 minutos por las notas. Dilo en una línea y sigue atendiendo; no lo esperes."
-              : "Responde ya con `stackchat q <consulta>`. Si lanzó un sync, dilo en una línea y no lo esperes.",
+            siguiente: caducada
+              ? "La sesión ha caducado y no se arregla reintentando: pídele un cURL nuevo (los pasos están en el skill) y no relances syncs. " +
+                (vacia
+                  ? "No hay datos con los que responder mientras tanto."
+                  : "Mientras tanto responde con lo que hay, diciendo de cuándo son las cifras.")
+              : vacia
+                ? "El primer sync tarda 3-4 minutos por las notas. Dilo en una línea y sigue atendiendo; no lo esperes."
+                : frescura === "fresco"
+                  ? "Responde ya con `stackchat q <consulta>`."
+                  : "Responde ya con `stackchat q <consulta>`, y **di de cuándo son las cifras**: no están frescas. " +
+                    (lanzado ? "Se está actualizando en segundo plano; dilo en una línea y no lo esperes." : ""),
             resumen: vacia ? null : getOverview(db),
           },
           null,
@@ -320,12 +360,16 @@ async function runSync(o: {
   });
   if (ingest.sessionExpired) {
     o.log("La sesión de Substack ha caducado. Repite `stackchat connect` con un cURL nuevo.");
+    // Queda en la base, no solo en el registro de texto: el estado se lee de `sync_runs`, y un
+    // intento que no llega a cargar nada sigue siendo información sobre por qué no hay datos nuevos.
+    recordFailedRun(o.db, "session_expired", "la sesión de Substack ha caducado");
     writeSyncLog("falló: la sesión de Substack ha caducado");
     return 2;
   }
   if (ingest.failed.length) o.log(`Fallaron: ${ingest.failed.map((f) => `${f.kind} (${f.error})`).join("; ")}`);
   if (!ingest.downloaded.length) {
     o.log("No se descargó nada; no hay nada que cargar.");
+    recordFailedRun(o.db, "nothing_downloaded", ingest.failed.map((f) => `${f.kind}: ${f.error}`).join("\n"));
     writeSyncLog("falló: no se descargó nada");
     return 2;
   }
