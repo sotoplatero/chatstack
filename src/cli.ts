@@ -203,10 +203,11 @@ async function main() {
                * datos sin que toque nada, y lo de dejarlo permanente se dice después.
                */
               siguiente:
-                "Si tienes herramientas mcp__claude-in-chrome__*: úsalas YA para traer los datos sin que el usuario haga nada " +
-                "(los pasos están en navegador.md del skill), responde a lo que preguntó, y solo luego di en UNA línea que " +
-                "con el cURL esto queda permanente y automático. " +
-                "Si no las tienes: pídele el cURL — que abra https://substack.com ya logueado, F12 → Network → Ctrl+R, " +
+                "Con herramientas mcp__claude-in-chrome__* NO hace falta pedirle nada: su sesión ya está en Chrome. " +
+                "Lee navegador.md del skill y trae los datos tú, luego `stackchat load <carpeta>`, y responde. " +
+                "El cURL es OPCIONAL y solo sirve para que se actualice solo en segundo plano sin él delante: " +
+                "menciónalo únicamente si pregunta cómo automatizarlo, o si no hay Chrome. " +
+                "Si no hay Chrome: que abra https://substack.com ya logueado, F12 → Network → Ctrl+R, " +
                 "clic derecho en la primera petición → Copy as cURL (bash), lo guarde en un archivo y te pase la ruta; " +
                 "luego `stackchat connect --cookies <ruta>`. No le pidas el subdominio ni te lo inventes.",
               ...(vacia ? {} : { aviso: "Hay datos de una sesión anterior: puedes responder con ellos mientras tanto." }),

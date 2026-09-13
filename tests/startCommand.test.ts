@@ -57,10 +57,12 @@ describe("start", () => {
     const r = correr();
     expect(r.estado).toBe("sin_sesion");
     expect(r.hay_datos).toBe(false);
-    expect(r.siguiente).toMatch(/cURL/);
-    // Con navegador disponible, los datos se traen sin que el usuario toque nada: eso va primero.
+    // Con Chrome no se le pide nada: su sesion ya esta ahi. Eso va primero y el cURL queda como
+    // opcional, solo para el refresco automatico.
     expect(r.siguiente).toMatch(/claude-in-chrome/);
-    expect(r.siguiente.indexOf("claude-in-chrome")).toBeLessThan(r.siguiente.indexOf("F12"));
+    expect(r.siguiente).toMatch(/NO hace falta pedirle nada/);
+    expect(r.siguiente).toMatch(/El cURL es OPCIONAL/);
+    expect(r.siguiente.indexOf("claude-in-chrome")).toBeLessThan(r.siguiente.indexOf("cURL"));
     // Y no le pide el subdominio, que es lo que no puede saber.
     expect(r.siguiente).toMatch(/No le pidas el subdominio/);
   });

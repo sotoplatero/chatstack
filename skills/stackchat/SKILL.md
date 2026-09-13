@@ -76,7 +76,7 @@ estado, vuelve a llamarlo.
 | `listo_actualizando` | Hay datos y ya se está bajando lo que faltaba. **Responde igual**, con lo que hay, y dilo en una línea. |
 | `descargando_por_primera_vez` | Base vacía y sesión válida. El primer sync tarda 3-4 minutos por las notas: dilo y sigue atendiendo. |
 | `sesion_caducada` | Hay datos, pero ya no se pueden actualizar. Responde **fechando las cifras** y pide un cURL nuevo. No relances syncs: no es un problema que se arregle reintentando. |
-| `sin_sesion` | No hay con qué descargar. `siguiente` trae los pasos del cURL; si además dice `hay_datos: true`, responde mientras tanto con lo que haya. |
+| `sin_sesion` | No hay sesión **guardada**, que no es lo mismo que no poder descargar: con Chrome, trae los datos tú y responde. Solo sin Chrome hace falta pedirle el cURL. |
 
 **Los datos viejos se fechan, no se disimulan.** El estado trae `datos_de_hace_horas` y `frescura`
 (`fresco` bajo 6 h, `viejo` bajo 48 h, `muy_viejo` por encima). Si no es `fresco`, di de cuándo son
@@ -93,23 +93,28 @@ el último intento. Se usa cuando algo va mal, no en cada sesión. El estado viv
 
 ## Conectar
 
-Solo si el estado de arriba dice `sin_sesion`. Hay dos caminos y **el orden importa**: primero
-consigue los datos sin que el usuario haga nada, y solo después habla de dejarlo permanente.
+Cuando el estado dice `sin_sesion`, la base está vacía pero **el usuario no tiene que hacer nada**.
 
-### Primero: si tienes herramientas `mcp__claude-in-chrome__*`
+### Con Chrome: usa Chrome. Punto.
 
-**Úsalas y no preguntes.** Su sesión de Substack ya está en Chrome, así que puedes traer los datos
-ahora mismo sin que toque nada: los pasos están en **`<SKILL_DIR>/navegador.md`**, léelo y hazlo.
-Responde a lo que te preguntó, y solo entonces añade **una línea**: que dando el cURL una vez, esto
-se actualiza solo para siempre y no hará falta repetirlo.
+Si tienes herramientas `mcp__claude-in-chrome__*`, su sesión de Substack ya está ahí. Lee
+**`<SKILL_DIR>/navegador.md`**, trae los datos, `$CS load <carpeta>` y responde. Sin preguntar, sin
+pedirle un archivo y **sin mencionar el cURL**.
 
-Pedirle que abra DevTools antes de haberle dado una sola respuesta es el peor arranque posible:
-convierte una pregunta en una tarea, y mucha gente se queda ahí.
+«No hay sesión guardada» no es un impedimento para responder: es solo el estado de una carpeta. Lo
+que hace falta para contestar es su sesión de Substack, y esa está en su navegador.
 
-### Si no las tienes: el cURL
+### El cURL es opcional, y no es un requisito para empezar
 
-Entonces sí, pídeselo directamente, sin ofrecerlo como una opción entre varias. Son cuatro pasos una
-sola vez en la vida y a partir de ahí todo se sincroniza solo.
+Sirve para una cosa concreta: que los datos se actualicen solos en segundo plano, sin él delante.
+Nada más. Sácalo solo en dos casos: si pregunta cómo automatizarlo, o si no hay Chrome.
+
+Pedírselo antes de haberle dado una sola respuesta convierte su pregunta en una tarea, y mucha
+gente se queda ahí.
+
+### Sin Chrome, entonces sí: el cURL
+
+Cuatro pasos, una vez, y a partir de ahí todo se sincroniza solo.
 
 1. Que abra en Chrome **`https://substack.com`**, con su cuenta ya iniciada.
 2. `F12` → pestaña **Network** → recargar con `Ctrl+R`.
@@ -132,10 +137,11 @@ httpOnly, así que `document.cookie` no la incluye; `read_network_requests` no d
 la propia extensión de Chrome bloquea la lectura de cookies. El navegador puede traer **datos**,
 nunca una **sesión guardada**.
 
-**Por qué el cURL sigue mereciendo la pena, aunque el navegador funcione.** La vía del navegador no
-deja sesión guardada, así que no hay `sync`: cada actualización futura exige al usuario delante y
-varios minutos. El cURL es una molestia que se paga una vez; el navegador, una que se paga siempre.
-Por eso se menciona **después** de haber respondido, y en una línea, no como un peaje de entrada.
+**Qué se pierde sin el cURL, por si lo pregunta.** La vía del navegador no deja sesión guardada, así
+que no hay `sync` automático: cada actualización futura le exige estar delante unos minutos. Con el
+cURL, los datos se refrescan solos en segundo plano. Es la diferencia entre una molestia que se paga
+una vez y otra que se paga siempre, pero **es su decisión, no un peaje que tú le cobras a la
+entrada**: se cuenta cuando pregunta, no antes de responderle.
 
 **El navegador llena la base y se retira.** Termina siempre en `$CS load`, y a partir de ahí se
 responde con `$CS q` como cualquier otro día. No se usa para mirar una cifra suelta, ni para
