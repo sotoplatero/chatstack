@@ -100,6 +100,26 @@ export const countsOf = (c: RawUser): NoteCounts => ({
 const sameCounts = (a: NoteCounts, b: NoteCounts) =>
   a.reaction_count === b.reaction_count && a.restacks === b.restacks && a.children_count === b.children_count;
 
+/**
+ * Un elemento del feed que está ahí porque alguien lo restackeó, no porque sea una nota escrita.
+ *
+ * Sin esto, separar lo tuyo de lo ajeno dependía solo del autor del comentario, y eso funciona
+ * únicamente porque Substack firma los restacks con el autor original. Es un detalle suyo, no una
+ * promesa: el día que un restack venga firmado con tu id, entraría como nota tuya y arrastraría
+ * likes y respuestas que no son de nada que hayas escrito.
+ *
+ * Se descarta por lo que se reconoce como restack en vez de exigir `context.type === "note"`: si
+ * Substack renombra el contexto o deja de mandarlo, esto se comporta como antes; la regla estricta,
+ * en cambio, se quedaría sin ninguna nota y en silencio.
+ *
+ * El restack con comentario no cae aquí, y es lo correcto: Substack crea una nota nueva firmada
+ * por ti, con tu texto, y esa sí es tuya.
+ */
+export function esRestack(item: RawUser): boolean {
+  const ctx = item?.context?.type ?? item?.contextType;
+  return typeof ctx === "string" && /restack/i.test(ctx);
+}
+
 export interface FetchNotesOptions {
   maxPages?: number;
   /** Contadores por nota tal y como están en la BD. Habilita el corte anticipado. */
@@ -109,7 +129,8 @@ export interface FetchNotesOptions {
 }
 
 /**
- * Notas propias del feed del perfil (se descartan posts y restacks de terceros).
+ * Notas propias del feed del perfil. Se descartan los posts, lo que firma otra persona y todo lo
+ * que esté ahí por un restack (ver `esRestack`).
  *
  * Con `known`, para de paginar cuando varias páginas seguidas solo traen notas ya conocidas con
  * los mismos contadores: el feed viene por fecha, así que más atrás solo hay notas viejas.
@@ -132,7 +153,7 @@ export async function fetchOwnNotes(
     let novedad = false;
     for (const it of items) {
       const c = it.comment;
-      if (it.type !== "comment" || !c || Number(c.user_id) !== userId) continue;
+      if (it.type !== "comment" || !c || Number(c.user_id) !== userId || esRestack(it)) continue;
       out.push(c);
       const prev = known?.get(Number(c.id));
       if (!prev || !sameCounts(prev, countsOf(c))) novedad = true;

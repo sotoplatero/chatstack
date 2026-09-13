@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { openDb, startRun } from "../src/db/index.js";
 import { loadDirectory } from "../src/load/index.js";
 import { loadNotes } from "../src/load/notes.js";
-import { collectNotes, compactNoteStats, type NoteRecord, type NotesBundle } from "../src/ingest/notes.js";
+import { collectNotes, compactNoteStats, esRestack, type NoteRecord, type NotesBundle } from "../src/ingest/notes.js";
 import { SubstackClient } from "../src/ingest/substack.js";
 import * as q from "../src/queries.js";
 
@@ -107,6 +107,47 @@ describe("bundle stackchat-files (vía navegador)", () => {
     expect(rep.status).toBe("ok");
     expect(rep.files.find((f) => f.path.endsWith("otra-cosa.json"))!.error).toMatch(/kind/);
     expect(db.prepare("SELECT COUNT(*) c FROM traffic").get()).toEqual({ c: 1 });
+  });
+});
+
+describe("un restack no es una nota tuya", () => {
+  const nota = (id: number, ctx: string | null, userId = ME) => ({
+    type: "comment",
+    context: ctx ? { type: ctx } : undefined,
+    comment: { id, user_id: userId, date: "2026-09-01T00:00:00.000Z", body: "x", reaction_count: 0, restacks: 0, children_count: 0 },
+  });
+
+  function feedCon(items: unknown[]): typeof fetch {
+    return (async (input: RequestInfo | URL) => {
+      const p = new URL(typeof input === "string" ? input : (input as Request).url).pathname;
+      const body = p === "/api/v1/user/profile/self" ? { id: ME } : { items, nextCursor: "" };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+  }
+
+  const cliente = (f: typeof fetch) => new SubstackClient("x", "substack.sid=s", () => {}, f, { retryBaseMs: 1, pollMs: 1, pauseMs: 0 });
+
+  it("descarta el restack aunque venga firmado con tu id", async () => {
+    // El caso que hoy se colaría: hasta ahora solo se miraba el autor, y Substack firma los
+    // restacks con el autor original únicamente porque le da la gana, no porque lo prometa.
+    const b = await collectNotes(cliente(feedCon([
+      nota(1, "note"),
+      nota(2, "comment_restack"),
+      nota(3, "post_restack"),
+    ])), {});
+    expect(b.notes.map((n) => n.id)).toEqual([1]);
+  });
+
+  it("sin campo de contexto se comporta como antes, en vez de quedarse sin notas", () => {
+    // Si Substack deja de mandar el contexto, la regla estricta borraría el archivo entero en
+    // silencio. Esta falla hacia el lado seguro.
+    expect(esRestack({ type: "comment" })).toBe(false);
+    expect(esRestack({ type: "comment", context: {} })).toBe(false);
+    expect(esRestack({ type: "comment", context: { type: "note" } })).toBe(false);
+    expect(esRestack({ type: "comment", context: { type: "comment_restack" } })).toBe(true);
+    // También si lo renombran con otra forma que siga diciendo restack.
+    expect(esRestack({ type: "comment", context: { type: "noteRestackV2" } })).toBe(true);
+    expect(esRestack({ type: "comment", contextType: "post_restack" })).toBe(true);
   });
 });
 

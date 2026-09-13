@@ -6678,6 +6678,10 @@ var countsOf = (c) => ({
   children_count: Number(c.children_count ?? 0)
 });
 var sameCounts = (a, b) => a.reaction_count === b.reaction_count && a.restacks === b.restacks && a.children_count === b.children_count;
+function esRestack(item) {
+  const ctx = item?.context?.type ?? item?.contextType;
+  return typeof ctx === "string" && /restack/i.test(ctx);
+}
 async function fetchOwnNotes(client, userId, opts = {}) {
   const { maxPages = 200, known, stopAfterUnchangedPages = 3 } = opts;
   const out = [];
@@ -6689,7 +6693,7 @@ async function fetchOwnNotes(client, userId, opts = {}) {
     let novedad = false;
     for (const it of items) {
       const c = it.comment;
-      if (it.type !== "comment" || !c || Number(c.user_id) !== userId) continue;
+      if (it.type !== "comment" || !c || Number(c.user_id) !== userId || esRestack(it)) continue;
       out.push(c);
       const prev = known?.get(Number(c.id));
       if (!prev || !sameCounts(prev, countsOf(c))) novedad = true;
