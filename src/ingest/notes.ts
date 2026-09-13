@@ -178,11 +178,35 @@ async function fetchReplies(client: SubstackClient, noteId: number): Promise<Not
   return out;
 }
 
+/**
+ * Las estadísticas de una nota llegan como la pantalla que las dibuja: unos 12 KB de tarjetas y
+ * series por nota. De todo eso solo se consultan las cifras, así que se guardan solo esas, en la
+ * misma forma que produce el snippet del navegador. Si cada vía guardara una cosa distinta, una
+ * consulta SQL sobre `notes.stats` funcionaría o no según de dónde vinieran los datos.
+ */
+export function compactNoteStats(raw: unknown): Record<string, Record<string, unknown>> | null {
+  const st = raw as { cards?: { cardId?: string; headers?: Campo[]; items?: Campo[] }[] } | null;
+  if (!st || !Array.isArray(st.cards)) return null;
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const c of st.cards) {
+    const v: Record<string, unknown> = {};
+    for (const h of c.headers ?? []) if (h?.title) v[h.title] = h.value;
+    for (const i of c.items ?? []) if (i?.title) v[i.title] = i.value;
+    if (Object.keys(v).length) out[c.cardId ?? "card"] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+interface Campo {
+  title?: string;
+  value?: unknown;
+}
+
 async function fetchNoteStats(client: SubstackClient, noteId: number): Promise<unknown | null> {
   try {
     const res = await client.get(ROOT + SOCIAL.noteStats(noteId), "application/json", 1);
     const j = (await res.json()) as Record<string, unknown>;
-    return j && !("error" in j) ? j : null;
+    return j && !("error" in j) ? compactNoteStats(j) : null;
   } catch {
     return null;
   }

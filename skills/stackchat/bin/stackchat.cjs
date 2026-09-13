@@ -6729,11 +6729,23 @@ async function fetchReplies(client, noteId) {
   }
   return out;
 }
+function compactNoteStats(raw) {
+  const st = raw;
+  if (!st || !Array.isArray(st.cards)) return null;
+  const out = {};
+  for (const c of st.cards) {
+    const v = {};
+    for (const h of c.headers ?? []) if (h?.title) v[h.title] = h.value;
+    for (const i of c.items ?? []) if (i?.title) v[i.title] = i.value;
+    if (Object.keys(v).length) out[c.cardId ?? "card"] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
 async function fetchNoteStats(client, noteId) {
   try {
     const res = await client.get(ROOT + SOCIAL.noteStats(noteId), "application/json", 1);
     const j = await res.json();
-    return j && !("error" in j) ? j : null;
+    return j && !("error" in j) ? compactNoteStats(j) : null;
   } catch {
     return null;
   }

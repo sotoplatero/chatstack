@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { openDb, startRun } from "../src/db/index.js";
 import { loadDirectory } from "../src/load/index.js";
 import { loadNotes } from "../src/load/notes.js";
-import { collectNotes, type NoteRecord, type NotesBundle } from "../src/ingest/notes.js";
+import { collectNotes, compactNoteStats, type NoteRecord, type NotesBundle } from "../src/ingest/notes.js";
 import { SubstackClient } from "../src/ingest/substack.js";
 import * as q from "../src/queries.js";
 
@@ -107,6 +107,29 @@ describe("bundle stackchat-files (vía navegador)", () => {
     expect(rep.status).toBe("ok");
     expect(rep.files.find((f) => f.path.endsWith("otra-cosa.json"))!.error).toMatch(/kind/);
     expect(db.prepare("SELECT COUNT(*) c FROM traffic").get()).toEqual({ c: 1 });
+  });
+});
+
+describe("compactNoteStats", () => {
+  it("se queda con las cifras de las tarjetas y descarta el resto", () => {
+    const crudo = {
+      cards: [
+        { cardId: "impressions", headers: [{ title: "Impressions", value: 9 }], items: [] },
+        { cardId: "audience", items: [{ title: "Subscribers", value: 3 }, { title: "Followers", value: 1 }] },
+        { cardId: "vacia", items: [{ value: 5 }] },
+      ],
+      series: [1, 2, 3],
+    };
+    expect(compactNoteStats(crudo)).toEqual({
+      impressions: { Impressions: 9 },
+      audience: { Subscribers: 3, Followers: 1 },
+    });
+  });
+
+  it("devuelve null cuando no hay nada que guardar", () => {
+    expect(compactNoteStats(null)).toBeNull();
+    expect(compactNoteStats({ error: "" })).toBeNull();
+    expect(compactNoteStats({ cards: [] })).toBeNull();
   });
 });
 
