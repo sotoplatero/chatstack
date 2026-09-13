@@ -19,10 +19,13 @@ ningún sitio. La base es un archivo en `~/.stackchat/`.
 | Datos | Qué incluye |
 |---|---|
 | **Suscriptores** | Email, plan, fecha de alta, fuente, país y **engagement individual**: puntuación de actividad (0-5), correos recibidos y abiertos (7d/30d/6m), clics, vistas de posts, días activo |
-| **Posts** | Título, fecha, audiencia, visitas, tasa de apertura, altas gratuitas y de pago generadas |
-| **Crecimiento** | Altas por fuente y día, tráfico diario, series de free/paid, bajas y cancelaciones |
+| **Posts** | Título, fecha, audiencia, enviados, entregados, aperturas, clics, likes, comentarios, restacks, bajas que provocó, lectores que llegaron al final, visitas y altas generadas |
+| **Crecimiento** | Altas por fuente y día, tráfico diario, seguidores, altas free, bajas con su fecha real, y las series de pago |
+| **Audiencia** | De dónde llegan las visitas y cuántas altas trae cada fuente, cuánto viene de la red de Substack, países, y **qué publicaciones comparten tu audiencia** |
 | **Notes** | Tus notas y **quién da like, quién restackea y quién responde**, con su nombre, su publicación y si te sigue |
 | **Histórico** | Cada sync guarda un snapshot: de comparar snapshots salen los upgrades, los downgrades y las bajas |
+
+Son dieciséis conjuntos, unas veinte peticiones y quince segundos por sync incremental.
 
 ## Instalar
 
