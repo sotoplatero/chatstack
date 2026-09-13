@@ -151,8 +151,13 @@ export const QUERIES: Record<string, QueryDef> = {
     flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${SERIES_GROUPS.join("|")} ${RANGE_HELP}`,
     run: (db, f) => q.getSeries(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", SERIES_GROUPS, "day")),
   },
+  unsubscribes: {
+    summary: "Quién se dio de baja, con nombre y fecha, juntando la lista de Substack y los que desaparecieron entre syncs.",
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --limit N ${RANGE_HELP}`,
+    run: (db, f) => q.getUnsubscribes(db, dateFlag(f, "from"), dateFlag(f, "to"), int(f, "limit", 50)),
+  },
   churn: {
-    summary: "Bajas y transiciones de plan entre syncs (necesita ≥2 syncs).",
+    summary: "Bajas y transiciones de plan entre syncs (necesita ≥2 syncs). Para solo las bajas, `unsubscribes` es más directa.",
     flags: `--from YYYY-MM-DD --to YYYY-MM-DD ${RANGE_HELP}`,
     run: (db, f) => q.getChurn(db, dateFlag(f, "from"), dateFlag(f, "to")),
   },

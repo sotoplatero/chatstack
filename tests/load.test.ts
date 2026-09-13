@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { openDb, type Db } from "../src/db/index.js";
 import { detectKind, normDate } from "../src/load/csv.js";
 import { loadDirectory } from "../src/load/index.js";
+import { runQuery } from "../src/queryCommand.js";
 import { normalizeSubscriberRow } from "../src/load/subscriberRow.js";
 
 const EMAIL_LIST_V1 = `email,active_subscription,expiry,plan,email_disabled,created_at,first_payment_at
@@ -237,6 +238,26 @@ describe("loadDirectory", () => {
     expect(rep.status).toBe("ok");
     const row = db.prepare("SELECT post_id, sent, clicks, likes, unsubscribes FROM post_email_stats").get();
     expect(row).toEqual({ post_id: "111.first-post", sent: 100, clicks: 4, likes: 9, unsubscribes: 1 });
+  });
+
+  it("las bajas separan la voluntaria de la que solo se nota al desaparecer", () => {
+    // Las dos clases existen y no coinciden: Substack solo anota la voluntaria. Mezclarlas da una
+    // cifra que no significa nada, y quedarse con una sola deja gente fuera.
+    const dir = fixtureDir({
+      "email_list.csv": EMAIL_LIST_V2,
+      "unsubscribes.csv":
+        "email,unsubscribed_at,subscribed_at,plan,source,name\n" +
+        "se-fue@x.com,2026-08-01T10:00:00.000Z,2026-05-01T00:00:00.000Z,free,notes,Quien Sea\n",
+    });
+    loadDirectory(db, dir);
+    // d@x.com estaba en V2 y no está en V1: desaparece sin que Substack anote nada.
+    loadDirectory(db, fixtureDir({ "email_list.csv": EMAIL_LIST_V1 }));
+    const r = runQuery(db, "unsubscribes", {}) as any;
+    expect(r.summary).toEqual({ baja_voluntaria: 1, desaparecidos_sin_baja_registrada: 1 });
+    expect(r.baja_voluntaria[0]).toMatchObject({ email: "se-fue@x.com", name: "Quien Sea" });
+    expect(r.desaparecidos_sin_baja_registrada[0].email).toBe("d@x.com");
+    // Y se dice que esa fecha es cuándo se notó, no cuándo se fue.
+    expect(r.desaparecidos_sin_baja_registrada[0]).toHaveProperty("detected_at");
   });
 
   it("registra archivos desconocidos sin abortar", () => {

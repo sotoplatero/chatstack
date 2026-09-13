@@ -415,6 +415,55 @@ export function getChurn(db: Db, from?: string, to?: string) {
   return { range: { from: from ?? null, to: to ?? null, both_ends_inclusive: true }, summary, churned, transitions };
 }
 
+/**
+ * Quién se fue, juntando las dos fuentes que existen, porque miden cosas distintas y discrepan:
+ *
+ * - `unsubscribes` es la lista del panel de Substack, con la fecha real de cada baja. Solo recoge
+ *   la baja voluntaria, la de quien pulsa el enlace.
+ * - `subscribers.unsubscribed_at` sale de comparar la lista entre syncs, así que detecta a
+ *   cualquiera que desaparezca, se haya ido como se haya ido: un rebote permanente, una marca de
+ *   spam o un borrado a mano. A cambio, su fecha es la del sync que lo notó, no la de la baja.
+ *
+ * Devolver solo una de las dos deja fuera gente de verdad o inventa precisión que no hay. Esta
+ * consulta enseña ambas y dice en qué se diferencian, para no tener que salir a buscarlo fuera.
+ */
+export function getUnsubscribes(db: Db, from?: string, to?: string, limit = 50) {
+  const rSub = dateRange("unsubscribed_at", from, to);
+  const deSubstack = db
+    .prepare(
+      `SELECT email, unsubscribed_at, subscribed_at, plan, source, name
+         FROM unsubscribes WHERE ${rSub.sql} ORDER BY unsubscribed_at DESC LIMIT ?`,
+    )
+    .all(...(rSub.args as any[]), limit) as Record<string, unknown>[];
+
+  const rDet = dateRange("unsubscribed_at", from, to);
+  const detectadas = db
+    .prepare(
+      `SELECT email, plan, subscribed_at, unsubscribed_at AS detected_at
+         FROM subscribers WHERE is_active = 0 AND unsubscribed_at IS NOT NULL AND ${rDet.sql}
+        ORDER BY unsubscribed_at DESC LIMIT ?`,
+    )
+    .all(...(rDet.args as any[]), limit) as Record<string, unknown>[];
+
+  const enSubstack = new Set(deSubstack.map((r) => String(r.email).toLowerCase()));
+  const soloDetectadas = detectadas.filter((r) => !enSubstack.has(String(r.email).toLowerCase()));
+
+  return {
+    range: { from: from ?? null, to: to ?? null, both_ends_inclusive: true },
+    summary: {
+      baja_voluntaria: deSubstack.length,
+      desaparecidos_sin_baja_registrada: soloDetectadas.length,
+    },
+    que_significa_cada_una: {
+      baja_voluntaria: "lista del panel de Substack, con la fecha real en que se dieron de baja",
+      desaparecidos_sin_baja_registrada:
+        "dejaron de aparecer en la lista entre dos syncs y Substack no anotó una baja: suele ser rebote permanente, marca de spam o borrado manual. `detected_at` es cuándo se notó, no cuándo se fueron",
+    },
+    baja_voluntaria: deSubstack,
+    desaparecidos_sin_baja_registrada: soloDetectadas,
+  };
+}
+
 export function getSchema(db: Db) {
   const tables = db
     .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")

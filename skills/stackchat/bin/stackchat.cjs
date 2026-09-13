@@ -2989,6 +2989,34 @@ function getChurn(db, from, to) {
   };
   return { range: { from: from ?? null, to: to ?? null, both_ends_inclusive: true }, summary, churned, transitions };
 }
+function getUnsubscribes(db, from, to, limit = 50) {
+  const rSub = dateRange("unsubscribed_at", from, to);
+  const deSubstack = db.prepare(
+    `SELECT email, unsubscribed_at, subscribed_at, plan, source, name
+         FROM unsubscribes WHERE ${rSub.sql} ORDER BY unsubscribed_at DESC LIMIT ?`
+  ).all(...rSub.args, limit);
+  const rDet = dateRange("unsubscribed_at", from, to);
+  const detectadas = db.prepare(
+    `SELECT email, plan, subscribed_at, unsubscribed_at AS detected_at
+         FROM subscribers WHERE is_active = 0 AND unsubscribed_at IS NOT NULL AND ${rDet.sql}
+        ORDER BY unsubscribed_at DESC LIMIT ?`
+  ).all(...rDet.args, limit);
+  const enSubstack = new Set(deSubstack.map((r) => String(r.email).toLowerCase()));
+  const soloDetectadas = detectadas.filter((r) => !enSubstack.has(String(r.email).toLowerCase()));
+  return {
+    range: { from: from ?? null, to: to ?? null, both_ends_inclusive: true },
+    summary: {
+      baja_voluntaria: deSubstack.length,
+      desaparecidos_sin_baja_registrada: soloDetectadas.length
+    },
+    que_significa_cada_una: {
+      baja_voluntaria: "lista del panel de Substack, con la fecha real en que se dieron de baja",
+      desaparecidos_sin_baja_registrada: "dejaron de aparecer en la lista entre dos syncs y Substack no anot\xF3 una baja: suele ser rebote permanente, marca de spam o borrado manual. `detected_at` es cu\xE1ndo se not\xF3, no cu\xE1ndo se fueron"
+    },
+    baja_voluntaria: deSubstack,
+    desaparecidos_sin_baja_registrada: soloDetectadas
+  };
+}
 function getSchema(db) {
   const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
   const counts = Object.fromEntries(
@@ -7378,8 +7406,13 @@ var QUERIES = {
     flags: `--from YYYY-MM-DD --to YYYY-MM-DD --group-by ${SERIES_GROUPS.join("|")} ${RANGE_HELP}`,
     run: (db, f) => getSeries(db, dateFlag(f, "from"), dateFlag(f, "to"), enumFlag(f, "group-by", SERIES_GROUPS, "day"))
   },
+  unsubscribes: {
+    summary: "Qui\xE9n se dio de baja, con nombre y fecha, juntando la lista de Substack y los que desaparecieron entre syncs.",
+    flags: `--from YYYY-MM-DD --to YYYY-MM-DD --limit N ${RANGE_HELP}`,
+    run: (db, f) => getUnsubscribes(db, dateFlag(f, "from"), dateFlag(f, "to"), int(f, "limit", 50))
+  },
   churn: {
-    summary: "Bajas y transiciones de plan entre syncs (necesita \u22652 syncs).",
+    summary: "Bajas y transiciones de plan entre syncs (necesita \u22652 syncs). Para solo las bajas, `unsubscribes` es m\xE1s directa.",
     flags: `--from YYYY-MM-DD --to YYYY-MM-DD ${RANGE_HELP}`,
     run: (db, f) => getChurn(db, dateFlag(f, "from"), dateFlag(f, "to"))
   },

@@ -16,14 +16,26 @@ description: >-
 Los datos de Substack del usuario en una base SQLite local que puedes preguntar. Todo se queda en
 su máquina: no hay servidor y no se envía nada a ningún sitio.
 
-## Dos reglas
+## Tres reglas
 
-**1. Comprueba antes de afirmar.** Ejecuta `$CS status` antes de decir una sola palabra sobre el
+**1. Se responde contra la base, y solo contra la base.** Toda pregunta sobre suscriptores, posts,
+crecimiento o notas se contesta con `$CS q` o `$CS sql`. El navegador y el cURL **no son formas de
+contestar**: son las dos únicas formas de *llenar* la base, y no se tocan para responder.
+
+Si te descubres navegando a Substack, abriendo el panel o pidiéndole un CSV para contestar una
+pregunta, párate: te has salido del carril. La respuesta está en la base, o no está en ninguna
+parte todavía, y entonces lo que toca es un `sync`, no una visita al navegador. Un `q` tarda
+milisegundos; la vía del navegador son minutos, varios turnos y el usuario delante.
+
+Y si la base dice cero, **cero es la respuesta**. «No hay ninguna baja» es un resultado, no un
+fallo que haya que ir a resolver a otro sitio.
+
+**2. Comprueba antes de afirmar.** Ejecuta `$CS status` antes de decir una sola palabra sobre el
 estado. Nunca afirmes que no está conectado, que no hay datos o que falta algo sin haberlo mirado
 en esta sesión. Es el error número uno: suena razonable y es falso, porque mucha gente ya tiene su
 sesión guardada de antes.
 
-**2. Actúa, no pidas permiso.** Consultar y sincronizar son acciones locales y de solo lectura:
+**3. Actúa, no pidas permiso.** Consultar y sincronizar son acciones locales y de solo lectura:
 hazlas y cuenta el resultado. Nada de «¿quieres que lo conecte?». Conseguir los datos es trabajo
 tuyo, nunca suyo: tú lanzas los syncs, tú esperas los exports, tú recoges los archivos. Lo único
 que puedes pedirle es el cURL, una vez, porque su sesión solo la tiene él. Si algo va a tardar,
@@ -108,6 +120,10 @@ página, que ya está autenticada. Los pasos están en **`<SKILL_DIR>/navegador.
 momento. No la elijas por parecer más cómoda: no deja sesión guardada, así que el usuario tendrá
 que estar delante en *cada* actualización futura.
 
+**El navegador llena la base y se retira.** Termina siempre en `$CS load`, y a partir de ahí se
+responde con `$CS q` como cualquier otro día. No se usa para mirar una cifra suelta, ni para
+comprobar algo «rápido» en el panel, ni para buscar un dato que no aparecía en una consulta.
+
 ## Consultas
 
 `$CS q <consulta> [--flags]` — todo sale como JSON por stdout. Empieza por `overview`.
@@ -126,6 +142,7 @@ que estar delante en *cada* actualización futura.
 | `growth` | Altas por fuente y series diarias: `--from` `--to` `--group-by` |
 | `series` | Suscriptores, seguidores, visitas, altas y bajas en una tabla: `--group-by` |
 | `sources` | Calidad por fuente de captación: cuántos, cuánto abren, cuántos se van |
+| `unsubscribes` | Quién se dio de baja, con nombre y fecha. **Es la consulta para «quién se fue».** |
 | `churn` | Bajas y cambios de plan entre syncs |
 | `referrers` | Quién te trae lectores |
 | `overlap` | Publicaciones con tu misma audiencia, candidatas a recomendación |
@@ -196,7 +213,11 @@ igual que un número. O ahórratelo y usa `q readers`, que ya lo hace bien.
 2. **`matched_subscriber_email` casa por nombre exacto**, porque Substack no revela el email de
    quien da like. Es una pista, no una certeza; dilo cuando la uses. `note_actors.is_subscribed`
    sí lo dice Substack directamente y es más fiable.
-3. **`churn` necesita al menos dos syncs**: las bajas salen de comparar snapshots.
+3. **Hay dos clases de baja y no coinciden.** Substack solo anota la voluntaria, la de quien pulsa
+   el enlace. Quien desaparece de la lista por un rebote, por marcar spam o por un borrado a mano
+   no figura ahí, y stackchat sí lo detecta al comparar syncs, aunque entonces la fecha es la del
+   sync que lo notó. `unsubscribes` devuelve las dos separadas; di de cuál hablas. `churn` añade
+   los cambios de plan y necesita al menos dos syncs.
 4. **Las fechas de la base son UTC.** Al hablar de «ayer» o de la hora de una nota, conviértelas a
    la zona del usuario; el sistema la da con `date +%z`.
 
