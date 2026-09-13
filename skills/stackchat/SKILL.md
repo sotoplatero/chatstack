@@ -90,7 +90,6 @@ cuenta; un candado impide que se solapen dos. Cuando el usuario vuelva a pregunt
 el último intento. Se usa cuando algo va mal, no en cada sesión. El estado vive en la base, en
 `sync_runs`: cada intento deja su fila con su resultado y, si falló, con el motivo en un código
 (`session_expired`, `nothing_downloaded`, `partial_sources`).
-el último sync de fondo. Se usa cuando algo va mal, no en cada sesión.
 
 ## Conectar
 
