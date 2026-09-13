@@ -51,6 +51,17 @@ Si `node --version` es menor, dilo y para: nada más va a funcionar.
 
 Datos y configuración viven en `~/.stackchat/` (`config.json`, `auth.json`, `stackchat.db`, `raw/`).
 
+## Dónde tiene que ejecutarse
+
+Los datos y la sesión viven en `~/.stackchat` **de la máquina donde corre el binario**. Si eso es un
+sandbox alojado y no el ordenador del usuario, stackchat no sirve ahí: su cookie no está, la base
+que llenes se pierde al cerrar, y la siguiente sesión vuelve a empezar de cero.
+
+`status` te dice en qué home estás. Si no reconoces esa ruta como la del usuario, compruébalo:
+que exista su carpeta personal con `Downloads` dentro. Si no la hay, **dilo en una línea y para**:
+que ejecute stackchat en su máquina, con Claude Code o con un espacio de trabajo local. No intentes
+apañarlo pidiendo el cURL ni tirando del navegador; ninguna de las dos cosas sobrevive al cierre.
+
 ## Antes de responder cualquier cosa
 
 Una llamada a `$CS status`. Es local y cuesta milisegundos. Te dice tres cosas:
